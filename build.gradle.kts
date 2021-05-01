@@ -5,14 +5,14 @@ plugins {
     kotlin("plugin.serialization") version "1.4.32"
     application
 
+    id("com.github.johnrengelman.shadow") version "7.0.0"
     id("io.spring.dependency-management") version "1.0.6.RELEASE"
 }
 
 group = "dev.brella"
-version = "1.0.0"
+version = "1.2.2"
 
 repositories {
-    jcenter()
     mavenCentral()
     maven(url = "https://maven.brella.dev")
     maven(url = "https://kotlin.bintray.com/ktor")
@@ -53,6 +53,7 @@ dependencies {
     implementation("org.springframework.data:spring-data-r2dbc:1.3.0")
     implementation("io.r2dbc:r2dbc-postgresql:0.8.7.RELEASE")
     implementation("io.r2dbc:r2dbc-h2:0.8.4.RELEASE")
+    implementation("io.r2dbc:r2dbc-pool:0.9.0.M1")
 
     implementation("io.jsonwebtoken:jjwt-api:0.11.2")
     implementation("io.jsonwebtoken:jjwt-impl:0.11.2")
@@ -69,4 +70,19 @@ tasks.test {
 
 tasks.withType<KotlinCompile>() {
     kotlinOptions.jvmTarget = "1.8"
+}
+
+application {
+    mainClass.set("io.ktor.server.netty.EngineMain")
+}
+
+tasks.withType<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar> {
+    mergeServiceFiles()
+    append("META-INF/spring.handlers")
+    append("META-INF/spring.schemas")
+    append("META-INF/spring.tooling")
+    transform(com.github.jengelman.gradle.plugins.shadow.transformers.PropertiesFileTransformer::class.java) {
+        paths = listOf("META-INF/spring.factories")
+        mergeStrategy = "append"
+    }
 }

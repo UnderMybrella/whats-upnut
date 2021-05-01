@@ -77,3 +77,4 @@ application.conf
 .gradle
 .idea
 build
+gen/
