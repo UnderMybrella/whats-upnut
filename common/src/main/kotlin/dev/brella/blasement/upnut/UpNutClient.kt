@@ -26,6 +26,14 @@ class UpNutClient(config: JsonObject) {
         const val GAME_VAR = ":game"
         const val PLAYER_VAR = ":player"
 
+        const val CREATED_VAR = ":created"
+        const val SEASON_VAR = ":season"
+        const val TOURNAMENT_VAR = ":tournament"
+        const val TYPE_VAR = ":type"
+        const val DAY_VAR = ":day"
+        const val PHASE_VAR = ":phase"
+        const val CATEGORY_VAR = ":category"
+
         const val TIME_FILTER = "time <= $TIME_VAR"
         const val TEAM_FILTER = "feed_id IN (SELECT feed_id FROM team_nuts WHERE team_id = $TEAM_VAR)"
         const val GAME_FILTER = "feed_id IN (SELECT feed_id FROM game_nuts WHERE game_id = $GAME_VAR)"
@@ -33,37 +41,47 @@ class UpNutClient(config: JsonObject) {
         const val SOURCES_FILTER = "source IN ($SOURCE_VAR)"
         const val NOT_SOURCES_FILTER = "source NOT IN ($SOURCE_VAR)"
 
-        val BASE_HOT = hotPSQLWithTime()
-        val BASE_HOT_SOURCES = hotPSQLWithTime(SOURCES_FILTER)
-        val BASE_HOT_NOT_SOURCES = hotPSQLWithTime(NOT_SOURCES_FILTER)
+        const val CREATED_FILTER = "($CREATED_VAR IS NULL OR category = $CREATED_VAR)"
+        const val CATEGORY_FILTER = "($CATEGORY_VAR IS NULL OR category = $CATEGORY_VAR)"
+        const val SEASON_FILTER = "($SEASON_VAR IS NULL OR season = $SEASON_VAR)"
+        const val TOURNAMENT_FILTER = "($TOURNAMENT_VAR IS NULL OR season = $TOURNAMENT_VAR)"
+        const val TYPE_FILTER = "($TYPE_VAR IS NULL OR season = $TYPE_VAR)"
+        const val DAY_FILTER = "($DAY_VAR IS NULL OR day = $DAY_VAR)"
+        const val PHASE_FILTER = "($PHASE_VAR IS NULL OR phase = $PHASE_VAR)"
 
-        val TEAM_HOT = hotPSQLWithTimeAndTeam()
-        val TEAM_HOT_SOURCES = hotPSQLWithTimeAndTeam(SOURCES_FILTER)
-        val TEAM_HOT_NOT_SOURCES = hotPSQLWithTimeAndTeam(NOT_SOURCES_FILTER)
+        const val METADATA_FILTER = "feed_id IN (SELECT feed_id FROM event_metadata WHERE $CREATED_FILTER AND $SEASON_FILTER AND $TOURNAMENT_FILTER AND $TYPE_FILTER AND $DAY_FILTER AND $PHASE_FILTER AND $CATEGORY_FILTER)"
+
+        val BASE_HOT = hotPSQLWithTime(METADATA_FILTER)
+        val BASE_HOT_SOURCES = hotPSQLWithTime(SOURCES_FILTER, METADATA_FILTER)
+        val BASE_HOT_NOT_SOURCES = hotPSQLWithTime(NOT_SOURCES_FILTER, METADATA_FILTER)
+
+        val TEAM_HOT = hotPSQLWithTimeAndTeam(METADATA_FILTER)
+        val TEAM_HOT_SOURCES = hotPSQLWithTimeAndTeam(SOURCES_FILTER, METADATA_FILTER)
+        val TEAM_HOT_NOT_SOURCES = hotPSQLWithTimeAndTeam(NOT_SOURCES_FILTER, METADATA_FILTER)
 
         val GAME_HOT = hotPSQLWithTimeAndGame()
-        val GAME_HOT_SOURCES = hotPSQLWithTimeAndGame(SOURCES_FILTER)
-        val GAME_HOT_NOT_SOURCES = hotPSQLWithTimeAndGame(NOT_SOURCES_FILTER)
+        val GAME_HOT_SOURCES = hotPSQLWithTimeAndGame(SOURCES_FILTER, METADATA_FILTER)
+        val GAME_HOT_NOT_SOURCES = hotPSQLWithTimeAndGame(NOT_SOURCES_FILTER, METADATA_FILTER)
 
-        val PLAYER_HOT = hotPSQLWithTimeAndPlayer()
-        val PLAYER_HOT_SOURCES = hotPSQLWithTimeAndPlayer(SOURCES_FILTER)
-        val PLAYER_HOT_NOT_SOURCES = hotPSQLWithTimeAndPlayer(NOT_SOURCES_FILTER)
+        val PLAYER_HOT = hotPSQLWithTimeAndPlayer(METADATA_FILTER)
+        val PLAYER_HOT_SOURCES = hotPSQLWithTimeAndPlayer(SOURCES_FILTER, METADATA_FILTER)
+        val PLAYER_HOT_NOT_SOURCES = hotPSQLWithTimeAndPlayer(NOT_SOURCES_FILTER, METADATA_FILTER)
 
-        @Language("PostgreSQL")
-        inline fun hotPSQL(where: String) =
-            NutSqlStatement("SELECT list.feed_id, list.sum, list.time FROM (SELECT feed_id, SUM(nuts) AS sum, MAX(time) as time FROM upnuts WHERE $where GROUP BY feed_id ORDER BY time DESC, sum DESC LIMIT $LIMIT_VAR) as list ORDER BY list.sum DESC")
+//        @Language("PostgreSQL")
+        inline fun hotPSQL(vararg where: String) =
+            NutSqlStatement("SELECT list.feed_id, list.sum, list.time FROM (SELECT feed_id, SUM(nuts) AS sum, MAX(time) as time FROM upnuts ${if (where.isEmpty()) "" else where.joinToString(prefix = "WHERE ", separator = " AND ")} GROUP BY feed_id ORDER BY time DESC, sum DESC LIMIT $LIMIT_VAR) as list ORDER BY list.sum DESC")
 
-        inline fun hotPSQLWithTime(and: String? = null) =
-            hotPSQL(if (and == null) TIME_FILTER else "$TIME_FILTER AND $and")
+        inline fun hotPSQLWithTime(vararg and: String) =
+            hotPSQL(TIME_FILTER, *and)
 
-        inline fun hotPSQLWithTimeAndTeam(and: String? = null) =
-            hotPSQL(if (and == null) "$TIME_FILTER AND $TEAM_FILTER" else "$TIME_FILTER AND $and AND $TEAM_FILTER")
+        inline fun hotPSQLWithTimeAndTeam(vararg and: String) =
+            hotPSQL(TIME_FILTER, TEAM_FILTER, *and)
 
-        inline fun hotPSQLWithTimeAndGame(and: String? = null) =
-            hotPSQL(if (and == null) "$TIME_FILTER AND $GAME_FILTER" else "$TIME_FILTER AND $and AND $GAME_FILTER")
+        inline fun hotPSQLWithTimeAndGame(vararg and: String) =
+            hotPSQL(TIME_FILTER, GAME_FILTER, *and)
 
-        inline fun hotPSQLWithTimeAndPlayer(and: String? = null) =
-            hotPSQL(if (and == null) "$TIME_FILTER AND $PLAYER_FILTER" else "$TIME_FILTER AND $and AND $PLAYER_FILTER")
+        inline fun hotPSQLWithTimeAndPlayer(vararg and: String) =
+            hotPSQL(TIME_FILTER, PLAYER_FILTER, *and)
     }
 
     val connectionFactory: ConnectionFactory = ConnectionFactories.get(
@@ -116,6 +134,7 @@ class UpNutClient(config: JsonObject) {
         BASE_HOT(client)
             .time(time)
             .limit(limit)
+            .metadata()
             .fetch()
             .all()
             .collectList()
@@ -126,6 +145,7 @@ class UpNutClient(config: JsonObject) {
             .time(time)
             .limit(limit)
             .sources(sources)
+            .metadata()
             .fetch()
             .all()
             .collectList()
@@ -136,6 +156,7 @@ class UpNutClient(config: JsonObject) {
             .time(time)
             .limit(limit)
             .sources(sources)
+            .metadata()
             .fetch()
             .all()
             .collectList()
@@ -147,6 +168,7 @@ class UpNutClient(config: JsonObject) {
             .team(teamID)
             .time(time)
             .limit(limit)
+            .metadata()
             .fetch()
             .all()
             .collectList()
@@ -158,6 +180,7 @@ class UpNutClient(config: JsonObject) {
             .time(time)
             .limit(limit)
             .sources(sources)
+            .metadata()
             .fetch()
             .all()
             .collectList()
@@ -169,6 +192,7 @@ class UpNutClient(config: JsonObject) {
             .time(time)
             .limit(limit)
             .sources(sources)
+            .metadata()
             .fetch()
             .all()
             .collectList()

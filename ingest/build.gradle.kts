@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "dev.brella"
-version = "1.2.2"
+version = "1.3.2"
 
 repositories {
     mavenCentral()
@@ -28,9 +28,6 @@ dependencies {
     val ktor_version = "1.5.3"
 
     implementation(project(":common"))
-
-    implementation("io.ktor:ktor-server-netty:$ktor_version")
-    implementation("io.ktor:ktor-serialization:$ktor_version")
 
     implementation("io.ktor:ktor-client-okhttp:$ktor_version")
     implementation("io.ktor:ktor-client-encoding:$ktor_version")
@@ -54,14 +51,7 @@ dependencies {
 
     implementation("org.springframework.data:spring-data-r2dbc:1.3.0")
     implementation("io.r2dbc:r2dbc-postgresql:0.8.7.RELEASE")
-    implementation("io.r2dbc:r2dbc-h2:0.8.4.RELEASE")
     implementation("io.r2dbc:r2dbc-pool:0.9.0.M1")
-
-    implementation("io.jsonwebtoken:jjwt-api:0.11.2")
-    implementation("io.jsonwebtoken:jjwt-impl:0.11.2")
-    // Uncomment the next line if you want to use RSASSA-PSS (PS256, PS384, PS512) algorithms:
-    implementation("org.bouncycastle:bcprov-jdk15on:1.68")
-    implementation("io.jsonwebtoken:jjwt-jackson:0.11.2") // or "io.jsonwebtoken:jjwt-gson:0.11.2' for gson
 
     testImplementation(kotlin("test-junit"))
 }
@@ -75,7 +65,7 @@ tasks.withType<KotlinCompile>() {
 }
 
 application {
-    mainClass.set("io.ktor.server.netty.EngineMain")
+    mainClass.set("dev.brella.blasement.upnut.ingest.NutIngestation")
 }
 
 tasks.withType<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar> {

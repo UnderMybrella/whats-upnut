@@ -3,10 +3,8 @@ package dev.brella.blasement.upnut.ingest
 import dev.brella.blasement.upnut.UpNutClient
 import dev.brella.blasement.upnut.UpNutEvent
 import dev.brella.blasement.upnut.getBooleanOrNull
-import dev.brella.blasement.upnut.getInt
 import dev.brella.blasement.upnut.getIntOrNull
 import dev.brella.blasement.upnut.getJsonObjectOrNull
-import dev.brella.blasement.upnut.getLong
 import dev.brella.blasement.upnut.getLongOrNull
 import dev.brella.blasement.upnut.loopEvery
 import dev.brella.kornea.blaseball.BlaseballApi
@@ -24,7 +22,6 @@ import io.ktor.client.features.compression.*
 import io.ktor.client.features.json.*
 import io.ktor.client.features.json.serializer.*
 import io.ktor.client.request.*
-import io.ktor.config.*
 import io.ktor.http.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -42,7 +39,6 @@ import kotlinx.serialization.json.intOrNull
 import org.slf4j.LoggerFactory
 import org.springframework.r2dbc.core.await
 import org.springframework.r2dbc.core.awaitOneOrNull
-import org.springframework.r2dbc.core.awaitRowsUpdated
 import java.io.File
 import java.time.Clock
 import java.time.Instant
@@ -54,6 +50,15 @@ import kotlin.time.seconds
 class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineScope {
     companion object {
         val THE_GAME_BAND = UUID.fromString("7fcb63bc-11f2-40b9-b465-f1d458692a63")
+
+        @JvmStatic
+        fun main(args: Array<String>) {
+            val baseConfig: JsonObject = File("ingest.json").takeIf(File::exists)?.readText()?.let(Json::decodeFromString) ?: JsonObject(emptyMap())
+            val r2dbc = baseConfig.getJsonObjectOrNull("r2dbc") ?: File("r2dbc.json").takeIf(File::exists)?.readText()?.let(Json::decodeFromString) ?: JsonObject(emptyMap())
+            val ingest = NutIngestation(baseConfig, UpNutClient(r2dbc))
+
+            runBlocking { ingest.join() }
+        }
     }
 
     override val coroutineContext: CoroutineContext = SupervisorJob() + Dispatchers.IO
@@ -327,23 +332,34 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                             .await()
                                     }
 
-                                if (nuts.client.sql("SELECT feed_id FROM event_metadata WHERE feed_id = $1")
-                                        .bind("$1", event.id)
-                                        .fetch()
-                                        .awaitOneOrNull()
-                                    != null
-                                ) {
-                                    nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 )")
-                                        .bind("$1", event.id)
-                                        .bind("$2", event.created.utc.unixMillisLong)
-                                        .bind("$3", event.season)
-                                        .bind("$4", event.tournament)
-                                        .bind("$5", event.type)
-                                        .bind("$6", event.day)
-                                        .bind("$7", event.phase)
-                                        .bind("$8", event.category)
-                                        .await()
-                                }
+//                                if (nuts.client.sql("SELECT feed_id FROM event_metadata WHERE feed_id = $1")
+//                                        .bind("$1", event.id)
+//                                        .fetch()
+//                                        .awaitOneOrNull()
+//                                    == null
+//                                ) {
+//                                    nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 )")
+//                                        .bind("$1", event.id)
+//                                        .bind("$2", event.created.utc.unixMillisLong)
+//                                        .bind("$3", event.season)
+//                                        .bind("$4", event.tournament)
+//                                        .bind("$5", event.type)
+//                                        .bind("$6", event.day)
+//                                        .bind("$7", event.phase)
+//                                        .bind("$8", event.category)
+//                                        .await()
+//                                }
+
+                                nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
+                                    .bind("$1", event.id)
+                                    .bind("$2", event.created.utc.unixMillisLong)
+                                    .bind("$3", event.season)
+                                    .bind("$4", event.tournament)
+                                    .bind("$5", event.type)
+                                    .bind("$6", event.day)
+                                    .bind("$7", event.phase)
+                                    .bind("$8", event.category)
+                                    .await()
 
                                 val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
                                                                 .bind("$1", event.id)
@@ -475,23 +491,16 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                             .await()
                                     }
 
-                                if (nuts.client.sql("SELECT feed_id FROM event_metadata WHERE feed_id = $1")
-                                        .bind("$1", event.id)
-                                        .fetch()
-                                        .awaitOneOrNull()
-                                    != null
-                                ) {
-                                    nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 )")
-                                        .bind("$1", event.id)
-                                        .bind("$2", event.created.utc.unixMillisLong)
-                                        .bind("$3", event.season)
-                                        .bind("$4", event.tournament)
-                                        .bind("$5", event.type)
-                                        .bind("$6", event.day)
-                                        .bind("$7", event.phase)
-                                        .bind("$8", event.category)
-                                        .await()
-                                }
+                                nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
+                                    .bind("$1", event.id)
+                                    .bind("$2", event.created.utc.unixMillisLong)
+                                    .bind("$3", event.season)
+                                    .bind("$4", event.tournament)
+                                    .bind("$5", event.type)
+                                    .bind("$6", event.day)
+                                    .bind("$7", event.phase)
+                                    .bind("$8", event.category)
+                                    .await()
 
                                 val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
                                                                 .bind("$1", event.id)
@@ -609,23 +618,16 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                             .await()
                                     }
 
-                                if (nuts.client.sql("SELECT feed_id FROM event_metadata WHERE feed_id = $1")
-                                        .bind("$1", event.id)
-                                        .fetch()
-                                        .awaitOneOrNull()
-                                    != null
-                                ) {
-                                    nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 )")
-                                        .bind("$1", event.id)
-                                        .bind("$2", event.created.utc.unixMillisLong)
-                                        .bind("$3", event.season)
-                                        .bind("$4", event.tournament)
-                                        .bind("$5", event.type)
-                                        .bind("$6", event.day)
-                                        .bind("$7", event.phase)
-                                        .bind("$8", event.category)
-                                        .await()
-                                }
+                                nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
+                                    .bind("$1", event.id)
+                                    .bind("$2", event.created.utc.unixMillisLong)
+                                    .bind("$3", event.season)
+                                    .bind("$4", event.tournament)
+                                    .bind("$5", event.type)
+                                    .bind("$6", event.day)
+                                    .bind("$7", event.phase)
+                                    .bind("$8", event.category)
+                                    .await()
 
                                 val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
                                                                 .bind("$1", event.id)
@@ -725,23 +727,16 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                             .await()
                                     }
 
-                                if (nuts.client.sql("SELECT feed_id FROM event_metadata WHERE feed_id = $1")
-                                        .bind("$1", event.id)
-                                        .fetch()
-                                        .awaitOneOrNull()
-                                    != null
-                                ) {
-                                    nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 )")
-                                        .bind("$1", event.id)
-                                        .bind("$2", event.created.utc.unixMillisLong)
-                                        .bind("$3", event.season)
-                                        .bind("$4", event.tournament)
-                                        .bind("$5", event.type)
-                                        .bind("$6", event.day)
-                                        .bind("$7", event.phase)
-                                        .bind("$8", event.category)
-                                        .await()
-                                }
+                                nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
+                                    .bind("$1", event.id)
+                                    .bind("$2", event.created.utc.unixMillisLong)
+                                    .bind("$3", event.season)
+                                    .bind("$4", event.tournament)
+                                    .bind("$5", event.type)
+                                    .bind("$6", event.day)
+                                    .bind("$7", event.phase)
+                                    .bind("$8", event.category)
+                                    .await()
 
                                 val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
                                                                 .bind("$1", event.id)
@@ -861,23 +856,16 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                             .await()
                                     }
 
-                                if (nuts.client.sql("SELECT feed_id FROM event_metadata WHERE feed_id = $1")
-                                        .bind("$1", event.id)
-                                        .fetch()
-                                        .awaitOneOrNull()
-                                    != null
-                                ) {
-                                    nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 )")
-                                        .bind("$1", event.id)
-                                        .bind("$2", event.created.utc.unixMillisLong)
-                                        .bind("$3", event.season)
-                                        .bind("$4", event.tournament)
-                                        .bind("$5", event.type)
-                                        .bind("$6", event.day)
-                                        .bind("$7", event.phase)
-                                        .bind("$8", event.category)
-                                        .await()
-                                }
+                                nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
+                                    .bind("$1", event.id)
+                                    .bind("$2", event.created.utc.unixMillisLong)
+                                    .bind("$3", event.season)
+                                    .bind("$4", event.tournament)
+                                    .bind("$5", event.type)
+                                    .bind("$6", event.day)
+                                    .bind("$7", event.phase)
+                                    .bind("$8", event.category)
+                                    .await()
 
                                 val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
                                                                 .bind("$1", event.id)
@@ -1009,23 +997,16 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                             .await()
                                     }
 
-                                if (nuts.client.sql("SELECT feed_id FROM event_metadata WHERE feed_id = $1")
-                                        .bind("$1", event.id)
-                                        .fetch()
-                                        .awaitOneOrNull()
-                                    != null
-                                ) {
-                                    nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 )")
-                                        .bind("$1", event.id)
-                                        .bind("$2", event.created.utc.unixMillisLong)
-                                        .bind("$3", event.season)
-                                        .bind("$4", event.tournament)
-                                        .bind("$5", event.type)
-                                        .bind("$6", event.day)
-                                        .bind("$7", event.phase)
-                                        .bind("$8", event.category)
-                                        .await()
-                                }
+                                nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
+                                    .bind("$1", event.id)
+                                    .bind("$2", event.created.utc.unixMillisLong)
+                                    .bind("$3", event.season)
+                                    .bind("$4", event.tournament)
+                                    .bind("$5", event.type)
+                                    .bind("$6", event.day)
+                                    .bind("$7", event.phase)
+                                    .bind("$8", event.category)
+                                    .await()
 
                                 val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
                                                                 .bind("$1", event.id)
@@ -1127,23 +1108,16 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                             .await()
                                     }
 
-                                if (nuts.client.sql("SELECT feed_id FROM event_metadata WHERE feed_id = $1")
-                                        .bind("$1", event.id)
-                                        .fetch()
-                                        .awaitOneOrNull()
-                                    != null
-                                ) {
-                                    nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 )")
-                                        .bind("$1", event.id)
-                                        .bind("$2", event.created.utc.unixMillisLong)
-                                        .bind("$3", event.season)
-                                        .bind("$4", event.tournament)
-                                        .bind("$5", event.type)
-                                        .bind("$6", event.day)
-                                        .bind("$7", event.phase)
-                                        .bind("$8", event.category)
-                                        .await()
-                                }
+                                nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
+                                    .bind("$1", event.id)
+                                    .bind("$2", event.created.utc.unixMillisLong)
+                                    .bind("$3", event.season)
+                                    .bind("$4", event.tournament)
+                                    .bind("$5", event.type)
+                                    .bind("$6", event.day)
+                                    .bind("$7", event.phase)
+                                    .bind("$8", event.category)
+                                    .await()
 
                                 val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
                                                                 .bind("$1", event.id)
@@ -1211,23 +1185,16 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                     } else {
                         if (eventMetadata) {
                             return@run nuts@{ time, event ->
-                                if (nuts.client.sql("SELECT feed_id FROM event_metadata WHERE feed_id = $1")
-                                        .bind("$1", event.id)
-                                        .fetch()
-                                        .awaitOneOrNull()
-                                    != null
-                                ) {
-                                    nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 )")
-                                        .bind("$1", event.id)
-                                        .bind("$2", event.created.utc.unixMillisLong)
-                                        .bind("$3", event.season)
-                                        .bind("$4", event.tournament)
-                                        .bind("$5", event.type)
-                                        .bind("$6", event.day)
-                                        .bind("$7", event.phase)
-                                        .bind("$8", event.category)
-                                        .await()
-                                }
+                                nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
+                                    .bind("$1", event.id)
+                                    .bind("$2", event.created.utc.unixMillisLong)
+                                    .bind("$3", event.season)
+                                    .bind("$4", event.tournament)
+                                    .bind("$5", event.type)
+                                    .bind("$6", event.day)
+                                    .bind("$7", event.phase)
+                                    .bind("$8", event.category)
+                                    .await()
 
                                 val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
                                                                 .bind("$1", event.id)
@@ -1333,23 +1300,16 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                             .await()
                                     }
 
-                                if (nuts.client.sql("SELECT feed_id FROM event_metadata WHERE feed_id = $1")
-                                        .bind("$1", event.id)
-                                        .fetch()
-                                        .awaitOneOrNull()
-                                    != null
-                                ) {
-                                    nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 )")
-                                        .bind("$1", event.id)
-                                        .bind("$2", event.created.utc.unixMillisLong)
-                                        .bind("$3", event.season)
-                                        .bind("$4", event.tournament)
-                                        .bind("$5", event.type)
-                                        .bind("$6", event.day)
-                                        .bind("$7", event.phase)
-                                        .bind("$8", event.category)
-                                        .await()
-                                }
+                                nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
+                                    .bind("$1", event.id)
+                                    .bind("$2", event.created.utc.unixMillisLong)
+                                    .bind("$3", event.season)
+                                    .bind("$4", event.tournament)
+                                    .bind("$5", event.type)
+                                    .bind("$6", event.day)
+                                    .bind("$7", event.phase)
+                                    .bind("$8", event.category)
+                                    .await()
 
                                 val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
                                                                 .bind("$1", event.id)
@@ -1479,23 +1439,16 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                             .await()
                                     }
 
-                                if (nuts.client.sql("SELECT feed_id FROM event_metadata WHERE feed_id = $1")
-                                        .bind("$1", event.id)
-                                        .fetch()
-                                        .awaitOneOrNull()
-                                    != null
-                                ) {
-                                    nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 )")
-                                        .bind("$1", event.id)
-                                        .bind("$2", event.created.utc.unixMillisLong)
-                                        .bind("$3", event.season)
-                                        .bind("$4", event.tournament)
-                                        .bind("$5", event.type)
-                                        .bind("$6", event.day)
-                                        .bind("$7", event.phase)
-                                        .bind("$8", event.category)
-                                        .await()
-                                }
+                                nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
+                                    .bind("$1", event.id)
+                                    .bind("$2", event.created.utc.unixMillisLong)
+                                    .bind("$3", event.season)
+                                    .bind("$4", event.tournament)
+                                    .bind("$5", event.type)
+                                    .bind("$6", event.day)
+                                    .bind("$7", event.phase)
+                                    .bind("$8", event.category)
+                                    .await()
 
                                 val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
                                                                 .bind("$1", event.id)
@@ -1609,23 +1562,16 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                             .await()
                                     }
 
-                                if (nuts.client.sql("SELECT feed_id FROM event_metadata WHERE feed_id = $1")
-                                        .bind("$1", event.id)
-                                        .fetch()
-                                        .awaitOneOrNull()
-                                    != null
-                                ) {
-                                    nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 )")
-                                        .bind("$1", event.id)
-                                        .bind("$2", event.created.utc.unixMillisLong)
-                                        .bind("$3", event.season)
-                                        .bind("$4", event.tournament)
-                                        .bind("$5", event.type)
-                                        .bind("$6", event.day)
-                                        .bind("$7", event.phase)
-                                        .bind("$8", event.category)
-                                        .await()
-                                }
+                                nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
+                                    .bind("$1", event.id)
+                                    .bind("$2", event.created.utc.unixMillisLong)
+                                    .bind("$3", event.season)
+                                    .bind("$4", event.tournament)
+                                    .bind("$5", event.type)
+                                    .bind("$6", event.day)
+                                    .bind("$7", event.phase)
+                                    .bind("$8", event.category)
+                                    .await()
 
                                 val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
                                                                 .bind("$1", event.id)
@@ -1721,23 +1667,16 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                             .await()
                                     }
 
-                                if (nuts.client.sql("SELECT feed_id FROM event_metadata WHERE feed_id = $1")
-                                        .bind("$1", event.id)
-                                        .fetch()
-                                        .awaitOneOrNull()
-                                    != null
-                                ) {
-                                    nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 )")
-                                        .bind("$1", event.id)
-                                        .bind("$2", event.created.utc.unixMillisLong)
-                                        .bind("$3", event.season)
-                                        .bind("$4", event.tournament)
-                                        .bind("$5", event.type)
-                                        .bind("$6", event.day)
-                                        .bind("$7", event.phase)
-                                        .bind("$8", event.category)
-                                        .await()
-                                }
+                                nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
+                                    .bind("$1", event.id)
+                                    .bind("$2", event.created.utc.unixMillisLong)
+                                    .bind("$3", event.season)
+                                    .bind("$4", event.tournament)
+                                    .bind("$5", event.type)
+                                    .bind("$6", event.day)
+                                    .bind("$7", event.phase)
+                                    .bind("$8", event.category)
+                                    .await()
 
                                 val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
                                                                 .bind("$1", event.id)
@@ -1853,23 +1792,16 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                             .await()
                                     }
 
-                                if (nuts.client.sql("SELECT feed_id FROM event_metadata WHERE feed_id = $1")
-                                        .bind("$1", event.id)
-                                        .fetch()
-                                        .awaitOneOrNull()
-                                    != null
-                                ) {
-                                    nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 )")
-                                        .bind("$1", event.id)
-                                        .bind("$2", event.created.utc.unixMillisLong)
-                                        .bind("$3", event.season)
-                                        .bind("$4", event.tournament)
-                                        .bind("$5", event.type)
-                                        .bind("$6", event.day)
-                                        .bind("$7", event.phase)
-                                        .bind("$8", event.category)
-                                        .await()
-                                }
+                                nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
+                                    .bind("$1", event.id)
+                                    .bind("$2", event.created.utc.unixMillisLong)
+                                    .bind("$3", event.season)
+                                    .bind("$4", event.tournament)
+                                    .bind("$5", event.type)
+                                    .bind("$6", event.day)
+                                    .bind("$7", event.phase)
+                                    .bind("$8", event.category)
+                                    .await()
 
                                 val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
                                                                 .bind("$1", event.id)
@@ -2001,23 +1933,16 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                             .await()
                                     }
 
-                                if (nuts.client.sql("SELECT feed_id FROM event_metadata WHERE feed_id = $1")
-                                        .bind("$1", event.id)
-                                        .fetch()
-                                        .awaitOneOrNull()
-                                    != null
-                                ) {
-                                    nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 )")
-                                        .bind("$1", event.id)
-                                        .bind("$2", event.created.utc.unixMillisLong)
-                                        .bind("$3", event.season)
-                                        .bind("$4", event.tournament)
-                                        .bind("$5", event.type)
-                                        .bind("$6", event.day)
-                                        .bind("$7", event.phase)
-                                        .bind("$8", event.category)
-                                        .await()
-                                }
+                                nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
+                                    .bind("$1", event.id)
+                                    .bind("$2", event.created.utc.unixMillisLong)
+                                    .bind("$3", event.season)
+                                    .bind("$4", event.tournament)
+                                    .bind("$5", event.type)
+                                    .bind("$6", event.day)
+                                    .bind("$7", event.phase)
+                                    .bind("$8", event.category)
+                                    .await()
 
                                 val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
                                                                 .bind("$1", event.id)
@@ -2119,23 +2044,16 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                             .await()
                                     }
 
-                                if (nuts.client.sql("SELECT feed_id FROM event_metadata WHERE feed_id = $1")
-                                        .bind("$1", event.id)
-                                        .fetch()
-                                        .awaitOneOrNull()
-                                    != null
-                                ) {
-                                    nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 )")
-                                        .bind("$1", event.id)
-                                        .bind("$2", event.created.utc.unixMillisLong)
-                                        .bind("$3", event.season)
-                                        .bind("$4", event.tournament)
-                                        .bind("$5", event.type)
-                                        .bind("$6", event.day)
-                                        .bind("$7", event.phase)
-                                        .bind("$8", event.category)
-                                        .await()
-                                }
+                                nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
+                                    .bind("$1", event.id)
+                                    .bind("$2", event.created.utc.unixMillisLong)
+                                    .bind("$3", event.season)
+                                    .bind("$4", event.tournament)
+                                    .bind("$5", event.type)
+                                    .bind("$6", event.day)
+                                    .bind("$7", event.phase)
+                                    .bind("$8", event.category)
+                                    .await()
 
                                 val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
                                                                 .bind("$1", event.id)
@@ -2203,23 +2121,16 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                     } else {
                         if (eventMetadata) {
                             return@run nuts@{ time, event ->
-                                if (nuts.client.sql("SELECT feed_id FROM event_metadata WHERE feed_id = $1")
-                                        .bind("$1", event.id)
-                                        .fetch()
-                                        .awaitOneOrNull()
-                                    != null
-                                ) {
-                                    nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 )")
-                                        .bind("$1", event.id)
-                                        .bind("$2", event.created.utc.unixMillisLong)
-                                        .bind("$3", event.season)
-                                        .bind("$4", event.tournament)
-                                        .bind("$5", event.type)
-                                        .bind("$6", event.day)
-                                        .bind("$7", event.phase)
-                                        .bind("$8", event.category)
-                                        .await()
-                                }
+                                nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
+                                    .bind("$1", event.id)
+                                    .bind("$2", event.created.utc.unixMillisLong)
+                                    .bind("$3", event.season)
+                                    .bind("$4", event.tournament)
+                                    .bind("$5", event.type)
+                                    .bind("$6", event.day)
+                                    .bind("$7", event.phase)
+                                    .bind("$8", event.category)
+                                    .await()
 
                                 val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
                                                                 .bind("$1", event.id)
@@ -2280,12 +2191,4 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
         teamsByTopJob.join()
         teamsByHotJob.join()
     }
-}
-
-fun main(args: Array<String>) {
-    val baseConfig: JsonObject = File("ingest.json").takeIf(File::exists)?.readText()?.let(Json::decodeFromString) ?: JsonObject(emptyMap())
-    val r2dbc = baseConfig.getJsonObjectOrNull("r2dbc") ?: File("r2dbc.json").takeIf(File::exists)?.readText()?.let(Json::decodeFromString) ?: JsonObject(emptyMap())
-    val ingest = NutIngestation(baseConfig, UpNutClient(r2dbc))
-
-    runBlocking { ingest.join() }
 }

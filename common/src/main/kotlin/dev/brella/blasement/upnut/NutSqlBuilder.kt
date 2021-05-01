@@ -1,5 +1,12 @@
 package dev.brella.blasement.upnut
 
+import dev.brella.blasement.upnut.UpNutClient.Companion.CATEGORY_VAR
+import dev.brella.blasement.upnut.UpNutClient.Companion.CREATED_VAR
+import dev.brella.blasement.upnut.UpNutClient.Companion.DAY_VAR
+import dev.brella.blasement.upnut.UpNutClient.Companion.PHASE_VAR
+import dev.brella.blasement.upnut.UpNutClient.Companion.SEASON_VAR
+import dev.brella.blasement.upnut.UpNutClient.Companion.TOURNAMENT_VAR
+import dev.brella.blasement.upnut.UpNutClient.Companion.TYPE_VAR
 import org.springframework.r2dbc.core.DatabaseClient
 import org.springframework.r2dbc.core.Parameter
 import java.util.*
@@ -14,4 +21,22 @@ class NutSqlBuilder(val statement: DatabaseClient.GenericExecuteSpec, val mappin
     inline fun team(id: UUID) = _bind(UpNutClient.TEAM_VAR, id)
     inline fun game(id: UUID) = _bind(UpNutClient.GAME_VAR, id)
     inline fun player(id: UUID) = _bind(UpNutClient.PLAYER_VAR, id)
+
+    inline fun created(time: Long?) = _bind(CREATED_VAR, time)
+    inline fun season(season: Int?) = _bind(SEASON_VAR, season)
+    inline fun tournament(tournament: Int?) = _bind(TOURNAMENT_VAR, tournament)
+    inline fun type(type: Int?) = _bind(TYPE_VAR, type)
+    inline fun day(day: Int?) = _bind(DAY_VAR, day)
+    inline fun phase(phase: Int?) = _bind(PHASE_VAR, phase)
+    inline fun category(category: Int?) = _bind(CATEGORY_VAR, category)
+
+    fun metadata() =
+        this
+            .created(null)
+            .season(null)
+            .tournament(null)
+            .type(null)
+            .day(null)
+            .phase(null)
+            .category(null)
 }
