@@ -1,4 +1,4 @@
-package dev.brella.blasement.upnut
+package dev.brella.blasement.upnut.common
 
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.*

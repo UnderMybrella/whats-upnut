@@ -1,12 +1,12 @@
 package dev.brella.blasement.upnut.ingest
 
-import dev.brella.blasement.upnut.UpNutClient
-import dev.brella.blasement.upnut.UpNutEvent
-import dev.brella.blasement.upnut.getBooleanOrNull
-import dev.brella.blasement.upnut.getIntOrNull
-import dev.brella.blasement.upnut.getJsonObjectOrNull
-import dev.brella.blasement.upnut.getLongOrNull
-import dev.brella.blasement.upnut.loopEvery
+import dev.brella.blasement.upnut.common.UpNutClient
+import dev.brella.blasement.upnut.common.UpNutEvent
+import dev.brella.blasement.upnut.common.getBooleanOrNull
+import dev.brella.blasement.upnut.common.getIntOrNull
+import dev.brella.blasement.upnut.common.getJsonObjectOrNull
+import dev.brella.blasement.upnut.common.getLongOrNull
+import dev.brella.blasement.upnut.common.loopEvery
 import dev.brella.kornea.blaseball.BlaseballApi
 import dev.brella.kornea.blaseball.endpoints.BlaseballDatabaseService
 import dev.brella.kornea.errors.common.KorneaResult
@@ -38,7 +38,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.intOrNull
 import org.slf4j.LoggerFactory
 import org.springframework.r2dbc.core.await
-import org.springframework.r2dbc.core.awaitOneOrNull
 import java.io.File
 import java.time.Clock
 import java.time.Instant
@@ -64,7 +63,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
     override val coroutineContext: CoroutineContext = SupervisorJob() + Dispatchers.IO
 
     val initJob = launch {
-        nuts.client.sql("CREATE TABLE IF NOT EXISTS upnuts (id BIGSERIAL PRIMARY KEY, nuts INT NOT NULL DEFAULT 1, feed_id uuid NOT NULL, source uuid NOT NULL, time BIGINT NOT NULL)")
+        nuts.client.sql("CREATE TABLE IF NOT EXISTS upnuts (id BIGSERIAL PRIMARY KEY, nuts INT NOT NULL DEFAULT 1, feed_id uuid NOT NULL, source uuid, provider uuid NOT NULL, time BIGINT NOT NULL)")
             .await()
 
         nuts.client.sql("CREATE TABLE IF NOT EXISTS game_nuts (id BIGSERIAL PRIMARY KEY, feed_id uuid NOT NULL, game_id uuid NOT NULL);")
@@ -77,6 +76,12 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
             .await()
 
         nuts.client.sql("CREATE TABLE IF NOT EXISTS event_metadata (feed_id UUID NOT NULL PRIMARY KEY, created BIGINT NOT NULL, season INT NOT NULL, tournament INT NOT NULL, type INT NOT NULL, day INT NOT NULL, phase INT NOT NULL, category INT NOT NULL)")
+            .await()
+
+        nuts.client.sql("CREATE TABLE IF NOT EXISTS snow_crystals (snow_id BIGINT NOT NULL PRIMARY KEY, uuid UUID NOT NULL);")
+            .await()
+
+        nuts.client.sql("CREATE INDEX IF NOT EXISTS snow_index_uuid ON snow_crystals (uuid);")
             .await()
     }
 
@@ -374,7 +379,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
                                 if (difference <= 0) return@nuts
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, source, time) VALUES ( $1, $2, $3, $4 )")
+                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                                     .bind("$1", difference)
                                     .bind("$2", event.id)
                                     .bind("$3", THE_GAME_BAND)
@@ -446,7 +451,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
                                 if (difference <= 0) return@nuts
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, source, time) VALUES ( $1, $2, $3, $4 )")
+                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                                     .bind("$1", difference)
                                     .bind("$2", event.id)
                                     .bind("$3", THE_GAME_BAND)
@@ -515,7 +520,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
                                 if (difference <= 0) return@nuts
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, source, time) VALUES ( $1, $2, $3, $4 )")
+                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                                     .bind("$1", difference)
                                     .bind("$2", event.id)
                                     .bind("$3", THE_GAME_BAND)
@@ -571,7 +576,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
                                 if (difference <= 0) return@nuts
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, source, time) VALUES ( $1, $2, $3, $4 )")
+                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                                     .bind("$1", difference)
                                     .bind("$2", event.id)
                                     .bind("$3", THE_GAME_BAND)
@@ -642,7 +647,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
                                 if (difference <= 0) return@nuts
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, source, time) VALUES ( $1, $2, $3, $4 )")
+                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                                     .bind("$1", difference)
                                     .bind("$2", event.id)
                                     .bind("$3", THE_GAME_BAND)
@@ -698,7 +703,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
                                 if (difference <= 0) return@nuts
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, source, time) VALUES ( $1, $2, $3, $4 )")
+                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                                     .bind("$1", difference)
                                     .bind("$2", event.id)
                                     .bind("$3", THE_GAME_BAND)
@@ -751,7 +756,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
                                 if (difference <= 0) return@nuts
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, source, time) VALUES ( $1, $2, $3, $4 )")
+                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                                     .bind("$1", difference)
                                     .bind("$2", event.id)
                                     .bind("$3", THE_GAME_BAND)
@@ -791,7 +796,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
                                 if (difference <= 0) return@nuts
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, source, time) VALUES ( $1, $2, $3, $4 )")
+                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                                     .bind("$1", difference)
                                     .bind("$2", event.id)
                                     .bind("$3", THE_GAME_BAND)
@@ -880,7 +885,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
                                 if (difference <= 0) return@nuts
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, source, time) VALUES ( $1, $2, $3, $4 )")
+                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                                     .bind("$1", difference)
                                     .bind("$2", event.id)
                                     .bind("$3", THE_GAME_BAND)
@@ -952,7 +957,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
                                 if (difference <= 0) return@nuts
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, source, time) VALUES ( $1, $2, $3, $4 )")
+                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                                     .bind("$1", difference)
                                     .bind("$2", event.id)
                                     .bind("$3", THE_GAME_BAND)
@@ -1021,7 +1026,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
                                 if (difference <= 0) return@nuts
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, source, time) VALUES ( $1, $2, $3, $4 )")
+                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                                     .bind("$1", difference)
                                     .bind("$2", event.id)
                                     .bind("$3", THE_GAME_BAND)
@@ -1077,7 +1082,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
                                 if (difference <= 0) return@nuts
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, source, time) VALUES ( $1, $2, $3, $4 )")
+                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                                     .bind("$1", difference)
                                     .bind("$2", event.id)
                                     .bind("$3", THE_GAME_BAND)
@@ -1132,7 +1137,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
                                 if (difference <= 0) return@nuts
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, source, time) VALUES ( $1, $2, $3, $4 )")
+                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                                     .bind("$1", difference)
                                     .bind("$2", event.id)
                                     .bind("$3", THE_GAME_BAND)
@@ -1172,7 +1177,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
                                 if (difference <= 0) return@nuts
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, source, time) VALUES ( $1, $2, $3, $4 )")
+                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                                     .bind("$1", difference)
                                     .bind("$2", event.id)
                                     .bind("$3", THE_GAME_BAND)
@@ -1209,7 +1214,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
                                 if (difference <= 0) return@nuts
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, source, time) VALUES ( $1, $2, $3, $4 )")
+                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                                     .bind("$1", difference)
                                     .bind("$2", event.id)
                                     .bind("$3", THE_GAME_BAND)
@@ -1233,7 +1238,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
                                 if (difference <= 0) return@nuts
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, source, time) VALUES ( $1, $2, $3, $4 )")
+                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                                     .bind("$1", difference)
                                     .bind("$2", event.id)
                                     .bind("$3", THE_GAME_BAND)
@@ -1324,7 +1329,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
                                 if (difference <= 0) return@nuts
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, source, time) VALUES ( $1, $2, $3, $4 )")
+                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                                     .bind("$1", difference)
                                     .bind("$2", event.id)
                                     .bind("$3", THE_GAME_BAND)
@@ -1396,7 +1401,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
                                 if (difference <= 0) return@nuts
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, source, time) VALUES ( $1, $2, $3, $4 )")
+                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                                     .bind("$1", difference)
                                     .bind("$2", event.id)
                                     .bind("$3", THE_GAME_BAND)
@@ -1463,7 +1468,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
                                 if (difference <= 0) return@nuts
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, source, time) VALUES ( $1, $2, $3, $4 )")
+                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                                     .bind("$1", difference)
                                     .bind("$2", event.id)
                                     .bind("$3", THE_GAME_BAND)
@@ -1517,7 +1522,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
                                 if (difference <= 0) return@nuts
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, source, time) VALUES ( $1, $2, $3, $4 )")
+                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                                     .bind("$1", difference)
                                     .bind("$2", event.id)
                                     .bind("$3", THE_GAME_BAND)
@@ -1586,7 +1591,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
                                 if (difference <= 0) return@nuts
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, source, time) VALUES ( $1, $2, $3, $4 )")
+                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                                     .bind("$1", difference)
                                     .bind("$2", event.id)
                                     .bind("$3", THE_GAME_BAND)
@@ -1640,7 +1645,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
                                 if (difference <= 0) return@nuts
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, source, time) VALUES ( $1, $2, $3, $4 )")
+                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                                     .bind("$1", difference)
                                     .bind("$2", event.id)
                                     .bind("$3", THE_GAME_BAND)
@@ -1691,7 +1696,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
                                 if (difference <= 0) return@nuts
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, source, time) VALUES ( $1, $2, $3, $4 )")
+                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                                     .bind("$1", difference)
                                     .bind("$2", event.id)
                                     .bind("$3", THE_GAME_BAND)
@@ -1729,7 +1734,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
                                 if (difference <= 0) return@nuts
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, source, time) VALUES ( $1, $2, $3, $4 )")
+                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                                     .bind("$1", difference)
                                     .bind("$2", event.id)
                                     .bind("$3", THE_GAME_BAND)
@@ -1816,7 +1821,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
                                 if (difference <= 0) return@nuts
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, source, time) VALUES ( $1, $2, $3, $4 )")
+                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                                     .bind("$1", difference)
                                     .bind("$2", event.id)
                                     .bind("$3", THE_GAME_BAND)
@@ -1888,7 +1893,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
                                 if (difference <= 0) return@nuts
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, source, time) VALUES ( $1, $2, $3, $4 )")
+                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                                     .bind("$1", difference)
                                     .bind("$2", event.id)
                                     .bind("$3", THE_GAME_BAND)
@@ -1957,7 +1962,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
                                 if (difference <= 0) return@nuts
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, source, time) VALUES ( $1, $2, $3, $4 )")
+                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                                     .bind("$1", difference)
                                     .bind("$2", event.id)
                                     .bind("$3", THE_GAME_BAND)
@@ -2013,7 +2018,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
                                 if (difference <= 0) return@nuts
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, source, time) VALUES ( $1, $2, $3, $4 )")
+                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                                     .bind("$1", difference)
                                     .bind("$2", event.id)
                                     .bind("$3", THE_GAME_BAND)
@@ -2068,7 +2073,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
                                 if (difference <= 0) return@nuts
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, source, time) VALUES ( $1, $2, $3, $4 )")
+                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                                     .bind("$1", difference)
                                     .bind("$2", event.id)
                                     .bind("$3", THE_GAME_BAND)
@@ -2108,7 +2113,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
                                 if (difference <= 0) return@nuts
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, source, time) VALUES ( $1, $2, $3, $4 )")
+                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                                     .bind("$1", difference)
                                     .bind("$2", event.id)
                                     .bind("$3", THE_GAME_BAND)
@@ -2145,7 +2150,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
                                 if (difference <= 0) return@nuts
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, source, time) VALUES ( $1, $2, $3, $4 )")
+                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                                     .bind("$1", difference)
                                     .bind("$2", event.id)
                                     .bind("$3", THE_GAME_BAND)
@@ -2169,7 +2174,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
                                 if (difference <= 0) return@nuts
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, source, time) VALUES ( $1, $2, $3, $4 )")
+                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                                     .bind("$1", difference)
                                     .bind("$2", event.id)
                                     .bind("$3", THE_GAME_BAND)

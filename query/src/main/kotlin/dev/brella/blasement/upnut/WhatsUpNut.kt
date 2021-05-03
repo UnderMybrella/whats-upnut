@@ -1,19 +1,28 @@
 package dev.brella.blasement.upnut
 
+import com.github.benmanes.caffeine.cache.Caffeine
 import com.soywiz.klock.DateTime
 import com.soywiz.klock.format
-import dev.brella.kornea.blaseball.BlaseballApi
+import dev.brella.blasement.upnut.common.NutDateTimeEvent
+import dev.brella.blasement.upnut.common.NutEpochEvent
+import dev.brella.blasement.upnut.common.NutSqlBuilder
+import dev.brella.blasement.upnut.common.NutsDateTime
+import dev.brella.blasement.upnut.common.NutsEpoch
+import dev.brella.blasement.upnut.common.UpNutClient
+import dev.brella.blasement.upnut.common.UpNutEvent
+import dev.brella.blasement.upnut.common.getJsonObjectOrNull
+import dev.brella.blasement.upnut.common.uuidOrNull
 import dev.brella.kornea.blaseball.base.common.BLASEBALL_TIME_PATTERN
-import dev.brella.kornea.blaseball.endpoints.BlaseballDatabaseService
-import dev.brella.kornea.errors.common.KorneaResult
-import dev.brella.kornea.errors.common.doOnFailure
-import dev.brella.kornea.errors.common.doOnThrown
-import dev.brella.kornea.errors.common.getOrNull
 import dev.brella.kornea.errors.common.map
+import dev.brella.ktornea.common.KorneaHttpResult
 import dev.brella.ktornea.common.getAsResult
 import dev.brella.ktornea.common.installGranularHttp
+import io.jsonwebtoken.Jwt
+import io.jsonwebtoken.JwtParser
+import io.jsonwebtoken.JwtParserBuilder
 import io.jsonwebtoken.Jwts
 import io.jsonwebtoken.SignatureAlgorithm
+import io.jsonwebtoken.impl.crypto.RsaProvider
 import io.jsonwebtoken.security.Keys
 import io.ktor.application.*
 import io.ktor.client.*
@@ -23,8 +32,8 @@ import io.ktor.client.features.compression.*
 import io.ktor.client.features.json.*
 import io.ktor.client.features.json.serializer.*
 import io.ktor.client.request.*
+import io.ktor.client.statement.*
 import io.ktor.client.utils.*
-import io.ktor.config.*
 import io.ktor.features.*
 import io.ktor.http.*
 import io.ktor.request.*
@@ -32,18 +41,11 @@ import io.ktor.response.*
 import io.ktor.routing.*
 import io.ktor.serialization.*
 import io.ktor.util.*
-import io.r2dbc.spi.ConnectionFactories
-import io.r2dbc.spi.ConnectionFactory
-import io.r2dbc.spi.ConnectionFactoryOptions.*
-import io.r2dbc.spi.Option
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.joinAll
+import io.ktor.util.pipeline.*
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.future.await
+import kotlinx.coroutines.future.future
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.reactive.awaitFirst
-import kotlinx.coroutines.reactive.awaitFirstOrNull
 import kotlinx.coroutines.reactive.awaitSingleOrNull
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
@@ -53,53 +55,28 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.put
-import org.intellij.lang.annotations.Language
 import org.slf4j.event.Level
 import org.springframework.r2dbc.core.DatabaseClient
-import org.springframework.r2dbc.core.Parameter
 import org.springframework.r2dbc.core.await
-import org.springframework.r2dbc.core.awaitOneOrNull
 import org.springframework.r2dbc.core.awaitRowsUpdated
 import org.springframework.r2dbc.core.awaitSingleOrNull
+import org.springframework.r2dbc.core.bind as bindNullable
 import java.io.File
+import java.nio.ByteBuffer
+import java.security.KeyFactory
+import java.security.spec.PKCS8EncodedKeySpec
+import java.security.spec.X509EncodedKeySpec
 import java.time.Clock
-import java.time.Duration
 import java.time.Instant
 import java.util.*
-import kotlin.collections.HashMap
-import kotlin.coroutines.CoroutineContext
+import java.util.concurrent.TimeUnit
 import kotlin.time.ExperimentalTime
-import kotlin.time.seconds
-import org.springframework.r2dbc.core.bind as bindNullable
 
 fun main(args: Array<String>) = io.ktor.server.netty.EngineMain.main(args)
 
-@OptIn(ExperimentalTime::class)
-fun Application.module(testing: Boolean = false) {
-    val json = Json {
-        ignoreUnknownKeys = true
-        encodeDefaults = true
-    }
-
-    install(ContentNegotiation) {
-        json(json)
-    }
-
-    install(CORS) {
-        anyHost()
-    }
-
-    install(ConditionalHeaders)
-    install(StatusPages)
-    install(CallLogging) {
-        level = Level.INFO
-    }
-
-    val config = environment.config.config("upnut")
-
-//    val upnut = BigUpNut(config)
-    
-    val upnut = UpNutClient(File("r2dbc.json").readText().let(Json::decodeFromString))
+class WhatsUpNut {
+    val configJson: JsonObject? = File("upnut.json").takeIf(File::exists)?.readText()?.let(Json::decodeFromString)
+    val upnut = UpNutClient(configJson?.getJsonObjectOrNull("r2dbc") ?: File("r2dbc.json").readText().let(Json::decodeFromString))
     val http = HttpClient(OkHttp) {
         installGranularHttp()
 
@@ -122,40 +99,252 @@ fun Application.module(testing: Boolean = false) {
         }
     }
 
-    val key = File(".secretkey").let { file ->
-        if (file.exists()) Keys.hmacShaKeyFor(file.readBytes())
-        else {
-            val key = Keys.secretKeyFor(SignatureAlgorithm.HS512)
-            file.writeBytes(key.encoded)
-            key
-        }
+    val initJob = GlobalScope.launch {
+        upnut.client.sql("CREATE TABLE IF NOT EXISTS auth_tokens (provider_id uuid NOT NULL, public_key bytea NOT NULL);")
+            .await()
     }
-    val parser = Jwts.parserBuilder().setSigningKey(key).build()
 
-    routing {
-        put("/{feed_id}/{source}") {
-            val authToken = call.request.header("Authorization")
-            try {
-                val authJws = parser.parseClaimsJws(authToken)
-                val id = authJws.body.id
+    val parsers = Caffeine.newBuilder()
+        .expireAfterAccess(10, TimeUnit.MINUTES)
+        .maximumSize(100)
+        .buildAsync<UUID, JwtParser> { providerID, _ ->
+            upnut.client.sql("SELECT public_key FROM auth_tokens WHERE provider_id = $1")
+                .bind("$1", providerID)
+                .fetch()
+                .one()
+                .mapNotNull { map ->
+                    val key = map["public_key"] ?: return@mapNotNull null
 
-                val feedID = UUID.fromString(call.parameters.getOrFail("feed_id"))
-                val source = call.parameters.getOrFail("source")
-
-                val time = call.parameters["time"]?.let { time -> BLASEBALL_TIME_PATTERN.tryParse(time, false)?.utc?.unixMillisLong ?: time.toLongOrNull() }
-                           ?: Instant.now(Clock.systemUTC()).toEpochMilli()
-
-                if (source != id) {
-                    call.respondJsonObject(HttpStatusCode.Forbidden) {
-                        put("error", "Source ID does not match auth ID")
-                        put("auth_id", id)
-                        put("source_id", source)
+                    return@mapNotNull when (key) {
+                        is ByteBuffer -> ByteArray(key.remaining()).also(key::get)
+                        is ByteArray -> key
+                        else -> null
                     }
-                } else {
-                    val sourceUUID = UUID.fromString(source)
-                    val nuts = upnut.client.sql("SELECT nuts FROM upnuts WHERE feed_id = $1 AND source = $2")
+                }.map { key ->
+                    Jwts.parserBuilder()
+                        .requireIssuer(providerID.toString())
+                        .setSigningKey(KeyFactory.getInstance("RSA").generatePublic(X509EncodedKeySpec(key)))
+                        .build()
+                }
+                .toFuture()
+        }
+
+    val eventsCache = Caffeine.newBuilder()
+        .expireAfterWrite(20, TimeUnit.SECONDS)
+        .buildKotlin<String, List<UpNutEvent>>()
+
+    val eventsNutCache = Caffeine.newBuilder()
+        .expireAfterWrite(20, TimeUnit.SECONDS)
+        .buildKotlin<String, List<Any>>()
+
+    val feedHotGlobalCache = Caffeine.newBuilder()
+        .expireAfterWrite(10, TimeUnit.SECONDS)
+        .buildKotlin<String, List<UpNutEvent>>()
+
+    val feedHotGameCache = Caffeine.newBuilder()
+        .expireAfterWrite(10, TimeUnit.SECONDS)
+        .buildKotlin<String, List<UpNutEvent>>()
+
+    val feedHotPlayerCache = Caffeine.newBuilder()
+        .expireAfterWrite(10, TimeUnit.SECONDS)
+        .buildKotlin<String, List<UpNutEvent>>()
+
+    val feedHotTeamCache = Caffeine.newBuilder()
+        .expireAfterWrite(10, TimeUnit.SECONDS)
+        .buildKotlin<String, List<UpNutEvent>>()
+
+    val feedTopGlobalCache = Caffeine.newBuilder()
+        .expireAfterWrite(1, TimeUnit.MINUTES)
+        .buildKotlin<String, List<UpNutEvent>>()
+
+    val feedTopGameCache = Caffeine.newBuilder()
+        .expireAfterWrite(1, TimeUnit.MINUTES)
+        .buildKotlin<String, List<UpNutEvent>>()
+
+    val feedTopPlayerCache = Caffeine.newBuilder()
+        .expireAfterWrite(1, TimeUnit.MINUTES)
+        .buildKotlin<String, List<UpNutEvent>>()
+
+    val feedTopTeamCache = Caffeine.newBuilder()
+        .expireAfterWrite(1, TimeUnit.MINUTES)
+        .buildKotlin<String, List<UpNutEvent>>()
+
+    suspend fun PipelineContext<Unit, ApplicationCall>.processGlobal(
+        cache: KotlinCache<String, List<UpNutEvent>>,
+        baseFunc: suspend (
+            time: Long, limit: Int,
+            noneOfProviders: List<UUID>?,
+            noneOfSources: List<UUID>?,
+            oneOfProviders: List<UUID>?,
+            oneOfSources: List<UUID>?,
+            addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec
+        ) -> List<Map<String, Any>>?,
+//        inSources: suspend (time: Long, limit: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec) -> List<Map<String, Any>>?,
+//        notInSources: suspend (time: Long, limit: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec) -> List<Map<String, Any>>?
+    ) {
+        val parameters = call.request.queryParameters
+
+        cache.getAsync(parameters.toStableString(), scope = this) {
+            val time = parameters["time"]?.let { time ->
+                time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
+            } ?: call.request.header("X-UpNut-Time")?.let { time ->
+                time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
+            } ?: Instant.now(Clock.systemUTC()).toEpochMilli()
+
+            val oneOfSources = (parameters["filter_sources"] ?: parameters["one_of_sources"]
+                                ?: call.request.header("X-UpNut-FilterSources") ?: call.request.header("X-UpNut-OneOfSources"))
+                ?.split(',')
+                ?.mapNotNull(String::uuidOrNull)
+
+            val noneOfSources = (parameters["filter_sources_not"] ?: parameters["none_of_sources"]
+                                 ?: call.request.header("X-UpNut-FilterSourcesNot") ?: call.request.header("X-UpNut-NoneOfSources"))
+                ?.split(',')
+                ?.mapNotNull(String::uuidOrNull)
+
+            val oneOfProviders = (parameters["filter_providers"] ?: parameters["one_of_providers"]
+                                  ?: call.request.header("X-UpNut-FilterProviders") ?: call.request.header("X-UpNut-OneOfProviders"))
+                ?.split(',')
+                ?.mapNotNull(String::uuidOrNull)
+
+            val noneOfProviders = (parameters["filter_providers_not"] ?: parameters["none_of_providers"]
+                                   ?: call.request.header("X-UpNut-FilterProvidersNot") ?: call.request.header("X-UpNut-NoneOfProviders"))
+                ?.split(',')
+                ?.mapNotNull(String::uuidOrNull)
+
+            val season = parameters["season"]?.toIntOrNull()
+            val tournament = parameters["tournament"]?.toIntOrNull()
+            val type = parameters["type"]?.toIntOrNull()
+            val day = parameters["day"]?.toIntOrNull()
+            val phase = parameters["phase"]?.toIntOrNull()
+            val category = parameters["category"]?.toIntOrNull()
+
+            val limit = (parameters["limit"]?.toIntOrNull() ?: call.request.header("X-UpNut-Limit")?.toIntOrNull())?.coerceIn(1, 50) ?: 50
+
+            val nuts =
+                baseFunc(time, limit, noneOfProviders, noneOfSources, oneOfProviders, oneOfSources) {
+                    season(season)
+                        .tournament(tournament)
+                        .type(type)
+                        .day(day)
+                        .phase(phase)
+                        .category(category)
+                }?.mapNotNull { map ->
+                    (map["feed_id"] as? UUID)?.let { feedID ->
+                        (map["sum"] as? Number)?.let { sum ->
+                            Pair(feedID, sum.toInt())
+                        }
+                    }
+                }?.toMap() ?: emptyMap()
+
+            http.eventually(nuts, upnut, time, limit, season, tournament, type, day, phase, category)
+        }.respond(call)
+    }
+
+    suspend fun PipelineContext<Unit, ApplicationCall>.processFiltered(
+        cache: KotlinCache<String, List<UpNutEvent>>,
+        baseFunc: suspend (
+            id: UUID, time: Long, limit: Int,
+            noneOfProviders: List<UUID>?,
+            noneOfSources: List<UUID>?,
+            oneOfProviders: List<UUID>?,
+            oneOfSources: List<UUID>?,
+            addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec
+        ) -> List<Map<String, Any>>?,
+//        inSources: suspend (id: UUID, time: Long, limit: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec) -> List<Map<String, Any>>?,
+//        notInSources: suspend (id: UUID, time: Long, limit: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec) -> List<Map<String, Any>>?
+    ) {
+        val parameters = call.request.queryParameters
+
+        cache.getAsync(parameters.toStableString(), scope = this) {
+            val time = parameters["time"]?.let { time ->
+                time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
+            } ?: call.request.header("X-UpNut-Time")?.let { time ->
+                time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
+            } ?: Instant.now(Clock.systemUTC()).toEpochMilli()
+
+            val oneOfSources = (parameters["filter_sources"] ?: parameters["one_of_sources"]
+                                ?: call.request.header("X-UpNut-FilterSources") ?: call.request.header("X-UpNut-OneOfSources"))
+                ?.split(',')
+                ?.mapNotNull(String::uuidOrNull)
+
+            val noneOfSources = (parameters["filter_sources_not"] ?: parameters["none_of_sources"]
+                                 ?: call.request.header("X-UpNut-FilterSourcesNot") ?: call.request.header("X-UpNut-NoneOfSources"))
+                ?.split(',')
+                ?.mapNotNull(String::uuidOrNull)
+
+            val oneOfProviders = (parameters["filter_providers"] ?: parameters["one_of_providers"]
+                                  ?: call.request.header("X-UpNut-FilterProviders") ?: call.request.header("X-UpNut-OneOfProviders"))
+                ?.split(',')
+                ?.mapNotNull(String::uuidOrNull)
+
+            val noneOfProviders = (parameters["filter_providers_not"] ?: parameters["none_of_providers"]
+                                   ?: call.request.header("X-UpNut-FilterProvidersNot") ?: call.request.header("X-UpNut-NoneOfProviders"))
+                ?.split(',')
+                ?.mapNotNull(String::uuidOrNull)
+
+            val id = (parameters["id"] ?: call.request.header("X-UpNut-ID")).uuidOrNull()
+                     ?: return@getAsync buildUserErrorJsonObject(HttpStatusCode.BadRequest) {
+                         put("error", "No ID passed via query parameter (id) or header (X-UpNut-ID)")
+                     }
+
+            val season = parameters["season"]?.toIntOrNull()
+            val tournament = parameters["tournament"]?.toIntOrNull()
+            val type = parameters["type"]?.toIntOrNull()
+            val day = parameters["day"]?.toIntOrNull()
+            val phase = parameters["phase"]?.toIntOrNull()
+            val category = parameters["category"]?.toIntOrNull()
+
+            val limit = (parameters["limit"]?.toIntOrNull() ?: call.request.header("X-UpNut-Limit")?.toIntOrNull())?.coerceIn(1, 50) ?: 50
+
+            val nuts =
+                baseFunc(id, time, limit, noneOfProviders, noneOfSources, oneOfProviders, oneOfSources) {
+                    season(season)
+                        .tournament(tournament)
+                        .type(type)
+                        .day(day)
+                        .phase(phase)
+                        .category(category)
+                }?.mapNotNull { map ->
+                    (map["feed_id"] as? UUID)?.let { feedID ->
+                        (map["sum"] as? Number)?.let { sum ->
+                            Pair(feedID, sum.toInt())
+                        }
+                    }
+                }?.toMap() ?: emptyMap()
+
+            http.eventually(nuts, upnut, time, limit, season, tournament, type, day, phase, category)
+        }.respond(call)
+    }
+
+    fun routing(routing: Routing) =
+        with(routing) {
+            put("/{feed_id}/{provider}") {
+                val authToken = call.request.header("Authorization")
+
+                try {
+                    val provider = call.parameters["provider"]?.uuidOrNull() ?: return@put call.respondJsonObject(HttpStatusCode.BadRequest) {
+                        put("error", "Invalid provider given")
+                    }
+
+                    val parser = parsers[provider].await()
+                    val authJws = parser.parseClaimsJws(authToken)
+
+                    val queryParams = call.request.queryParameters
+
+                    val source = queryParams["source"]?.uuidOrNull()
+
+                    val feedID = call.parameters["feed_id"]?.uuidOrNull() ?: return@put call.respondJsonObject(HttpStatusCode.BadRequest) {
+                        put("error", "Invalid feed id given")
+                    }
+
+                    val time = queryParams["time"]?.let { time ->
+                        BLASEBALL_TIME_PATTERN.tryParse(time, false)?.utc?.unixMillisLong ?: time.toLongOrNull()
+                    } ?: Instant.now(Clock.systemUTC()).toEpochMilli()
+
+                    val nuts = upnut.client.sql("SELECT nuts FROM upnuts WHERE feed_id = $1 AND provider = $2 AND source IS NOT DISTINCT FROM $3")
                                    .bind("$1", feedID)
-                                   .bind("$2", sourceUUID)
+                                   .bind("$2", provider)
+                                   .bind("$3", source)
                                    .fetch()
                                    .awaitSingleOrNull()
                                    ?.get("nuts")
@@ -167,43 +356,46 @@ fun Application.module(testing: Boolean = false) {
                             put("error", "You've already Upshelled that event.")
                         }
                     } else {
-                        upnut.client.sql("INSERT INTO upnuts (nuts, feed_id, source, time) VALUES ( $1, $2, $3, $4 )")
+                        upnut.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, source, time) VALUES ( $1, $2, $3, $4, $5)")
                             .bind("$1", 1)
                             .bind("$2", feedID)
-                            .bind("$3", sourceUUID)
-                            .bind("$4", time)
+                            .bind("$3", provider)
+                            .bindNullable("$4", source)
+                            .bind("$5", time)
                             .fetch()
                             .awaitRowsUpdated()
 
                         call.respond(HttpStatusCode.Created, EmptyContent)
                     }
-                }
-            } catch (th: Throwable) {
-                call.respondJsonObject(HttpStatusCode.Unauthorized) {
-                    put("stack_trace", th.stackTraceToString())
+                } catch (th: Throwable) {
+                    call.respondJsonObject(HttpStatusCode.Unauthorized) {
+                        put("stack_trace", th.stackTraceToString())
+                    }
                 }
             }
-        }
 
-        delete("/{feed_id}/{source}") {
-            val authToken = call.request.header("Authorization")
-            try {
-                val authJws = parser.parseClaimsJws(authToken)
-                val id = authJws.body.id
-
-                val feedID = UUID.fromString(call.parameters.getOrFail("feed_id"))
-                val source = call.parameters.getOrFail("source")
-
-                if (source != id) {
-                    call.respondJsonObject(HttpStatusCode.Forbidden) {
-                        put("error", "Source ID does not match auth ID")
-                        put("auth_id", id)
-                        put("source_id", source)
+            delete("/{feed_id}/{provider}") {
+                val authToken = call.request.header("Authorization")
+                try {
+                    val provider = call.parameters["provider"]?.uuidOrNull() ?: return@delete call.respondJsonObject(HttpStatusCode.BadRequest) {
+                        put("error", "Invalid provider given")
                     }
-                } else {
-                    val rowsUpdated = upnut.client.sql("DELETE FROM upnuts WHERE feed_id = $1 AND source = $2")
+
+                    val parser = parsers[provider].await()
+                    val authJws = parser.parseClaimsJws(authToken)
+
+                    val queryParams = call.request.queryParameters
+
+                    val source = queryParams["source"]?.uuidOrNull()
+
+                    val feedID = call.parameters["feed_id"]?.uuidOrNull() ?: return@delete call.respondJsonObject(HttpStatusCode.BadRequest) {
+                        put("error", "Invalid feed id given")
+                    }
+
+                    val rowsUpdated = upnut.client.sql("DELETE FROM upnuts WHERE feed_id = $1 AND provider = $2 AND source IS NOT DISTINCT FROM $3")
                         .bind("$1", feedID)
-                        .bind("$2", UUID.fromString(source))
+                        .bind("$2", source)
+                        .bind("$3", source)
                         .fetch()
                         .awaitRowsUpdated()
 
@@ -214,782 +406,568 @@ fun Application.module(testing: Boolean = false) {
                     } else {
                         call.respond(HttpStatusCode.NoContent, EmptyContent)
                     }
-                }
-            } catch (th: Throwable) {
-                call.respondJsonObject(HttpStatusCode.Unauthorized) {
-                    put("stack_trace", th.stackTraceToString())
+                } catch (th: Throwable) {
+                    call.respondJsonObject(HttpStatusCode.Unauthorized) {
+                        put("stack_trace", th.stackTraceToString())
+                    }
                 }
             }
-        }
 
-        get("/events") {
-            val parameters = call.request.queryParameters
+            get("/events") {
+                val parameters = call.request.queryParameters
+                val cacheKey = parameters.toStableString()
 
-            val player = (parameters["player"] ?: call.request.header("X-UpNut-Player"))?.uuidOrNull()
-            val time = parameters["time"]?.let { time ->
-                time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
-            } ?: call.request.header("X-UpNut-Time")?.let { time ->
-                time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
-            } ?: Instant.now(Clock.systemUTC()).toEpochMilli()
-            val filterSources = (parameters["filter_sources"] ?: call.request.header("X-UpNut-FilterSources"))
-                ?.split(',')
-                ?.mapNotNull(String::uuidOrNull)
-            val filterSourcesNot = (parameters["filter_sources_not"] ?: call.request.header("X-UpNut-FilterSourcesNot"))
-                ?.split(',')
-                ?.mapNotNull(String::uuidOrNull)
-
-            http.getAsResult<List<UpNutEvent>>("https://api.sibr.dev/eventually/events") {
-                url.parameters.appendAll(parameters)
-            }.map { list ->
-                list.map { event ->
-                    val sum = when {
-                        filterSources != null -> {
-                            upnut.client.sql("SELECT SUM(nuts) FROM upnuts WHERE feed_id = $1 AND time <= $2 AND source IN ($3)")
-                                .bind("$1", event.id)
-                                .bind("$2", time)
-                                .bind("$3", filterSources)
-                                .fetch()
-                                .awaitSingleOrNull()
-                                ?.values
-                                ?.run { firstOrNull() as? Number }
-                                ?.toInt() ?: event.nuts.intOrNull ?: 0
-                        }
-                        filterSourcesNot != null -> {
-                            upnut.client.sql("SELECT SUM(nuts) FROM upnuts WHERE feed_id = $1 AND time <= $2 AND source NOT IN ($3)")
-                                .bind("$1", event.id)
-                                .bind("$2", time)
-                                .bind("$3", filterSourcesNot)
-                                .fetch()
-                                .awaitSingleOrNull()
-                                ?.values
-                                ?.run { firstOrNull() as? Number }
-                                ?.toInt() ?: event.nuts.intOrNull ?: 0
-                        }
-                        else -> {
-                            upnut.client.sql("SELECT SUM(nuts) FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                .bind("$1", event.id)
-                                .bind("$2", time)
-                                .fetch()
-                                .awaitSingleOrNull()
-                                ?.values
-                                ?.run { firstOrNull() as? Number }
-                                ?.toInt() ?: event.nuts.intOrNull ?: 0
-                        }
-                    }
-
-                    val metadata: JsonElement
-
-                    if (player != null) {
-                        val upNut = upnut.client.sql("SELECT SUM(nuts) FROM upnuts WHERE feed_id = $1 AND time <= $2 AND source = $3")
-                            .bind("$1", event.id)
-                            .bind("$2", time)
-                            .bindNullable("$3", player)
-                            .fetch()
-                            .awaitSingleOrNull()
-                            ?.values
-                            ?.run { firstOrNull() as? Number }
-                            ?.toInt()
-
-                        metadata = if (upNut != null && upNut > 0) when (val metadata = event.metadata) {
-                            is JsonObject -> JsonObject(metadata + Pair("upnut", JsonPrimitive(true)))
-                            is JsonNull -> JsonObject(mapOf("upnut" to JsonPrimitive(true)))
-                            else -> event.metadata
-                        } else event.metadata
-                    } else {
-                        metadata = event.metadata
-                    }
-
-                    if (sum != event.nuts.intOrNull) {
-                        event.copy(nuts = JsonPrimitive(sum), metadata = metadata)
-                    } else {
-                        event
-                    }
-                }
-            }.respond(call)
-        }
-
-        get("/nuts") {
-            val parameters = call.request.queryParameters
-
-            val time = parameters["time"]?.let { time ->
-                time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
-            } ?: call.request.header("X-UpNut-Time")?.let { time ->
-                time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
-            } ?: Instant.now(Clock.systemUTC()).toEpochMilli()
-            val filterSources = (parameters["filter_sources"] ?: call.request.header("X-UpNut-FilterSources"))
-                ?.split(',')
-                ?.mapNotNull(String::uuidOrNull)
-            val filterSourcesNot = (parameters["filter_sources_not"] ?: call.request.header("X-UpNut-FilterSourcesNot"))
-                ?.split(',')
-                ?.mapNotNull(String::uuidOrNull)
-
-            val formatAsDateTime = (parameters["time_format"] ?: call.request.header("X-UpNut-TimeFormat")) ==
-                    "datetime"
-
-            http.getAsResult<List<UpNutEvent>>("https://api.sibr.dev/eventually/events") {
-                url.parameters.appendAll(parameters)
-            }.map { list ->
-                list.map { event ->
-                    val nuts = when {
-                        filterSources != null -> {
-                            upnut.client.sql("SELECT nuts, source, time FROM upnuts WHERE feed_id = $1 AND time <= $2 AND source IN ($3)")
-                                .bind("$1", event.id)
-                                .bind("$2", time)
-                                .bind("$3", filterSources)
-                                .fetch()
-                                .all()
-                                .collectList()
-                                .awaitSingleOrNull()
-                                ?.mapNotNull { map ->
-                                    (map["nuts"] as? Number)?.let { nuts ->
-                                        (map["source"] as? String)?.let { source ->
-                                            (map["time"] as? Number)?.let { time ->
-                                                NutsEpoch(nuts, source, time)
-                                            }
-                                        }
-                                    }
-                                }
-                        }
-                        filterSourcesNot != null -> {
-                            upnut.client.sql("SELECT nuts, source, time FROM upnuts WHERE feed_id = $1 AND time <= $2 AND source NOT IN ($3)")
-                                .bind("$1", event.id)
-                                .bind("$2", time)
-                                .bind("$3", filterSourcesNot)
-                                .fetch()
-                                .all()
-                                .collectList()
-                                .awaitSingleOrNull()
-                                ?.mapNotNull { map ->
-                                    (map["nuts"] as? Number)?.let { nuts ->
-                                        (map["source"] as? String)?.let { source ->
-                                            (map["time"] as? Number)?.let { time ->
-                                                NutsEpoch(nuts, source, time)
-                                            }
-                                        }
-                                    }
-                                }
-                        }
-                        else -> {
-                            upnut.client.sql("SELECT nuts, source, time FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                .bind("$1", event.id)
-                                .bind("$2", time)
-                                .fetch()
-                                .all()
-                                .collectList()
-                                .awaitSingleOrNull()
-                                ?.mapNotNull { map ->
-                                    (map["nuts"] as? Number)?.let { nuts ->
-                                        (map["source"] as? String)?.let { source ->
-                                            (map["time"] as? Number)?.let { time ->
-                                                NutsEpoch(nuts, source, time)
-                                            }
-                                        }
-                                    }
-                                }
-                        }
-                    }
-
-                    if (formatAsDateTime) {
-                        NutDateTimeEvent(
-                            event.id,
-                            event.playerTags,
-                            event.teamTags,
-                            event.gameTags,
-                            event.created,
-                            event.season,
-                            event.tournament,
-                            event.type,
-                            event.day,
-                            event.phase,
-                            event.category,
-                            event.description,
-                            nuts?.map { (nuts, source, time) -> NutsDateTime(nuts, source, BLASEBALL_TIME_PATTERN.format(DateTime.fromUnix(time))) } ?: emptyList(),
-                            event.metadata
-                        )
-                    } else {
-                        NutEpochEvent(
-                            event.id,
-                            event.playerTags,
-                            event.teamTags,
-                            event.gameTags,
-                            event.created,
-                            event.season,
-                            event.tournament,
-                            event.type,
-                            event.day,
-                            event.phase,
-                            event.category,
-                            event.description,
-                            nuts ?: emptyList(),
-                            event.metadata
-                        )
-                    }
-                }
-            }.respond(call)
-        }
-
-        route("/feed") {
-            route("/hot") {
-                get("/global") {
-                    val parameters = call.request.queryParameters
-
+                eventsCache.getAsync(cacheKey, scope = this) {
+                    val player = (parameters["player"] ?: call.request.header("X-UpNut-Player"))?.uuidOrNull()
                     val time = parameters["time"]?.let { time ->
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
                     } ?: call.request.header("X-UpNut-Time")?.let { time ->
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
                     } ?: Instant.now(Clock.systemUTC()).toEpochMilli()
-                    val filterSources = (parameters["filter_sources"] ?: call.request.header("X-UpNut-FilterSources"))
-                        ?.split(',')
-                        ?.mapNotNull(String::uuidOrNull)
-                    val filterSourcesNot = (parameters["filter_sources_not"] ?: call.request.header("X-UpNut-FilterSourcesNot"))
+
+                    val oneOfSources = (parameters["filter_sources"] ?: parameters["one_of_sources"]
+                                        ?: call.request.header("X-UpNut-FilterSources") ?: call.request.header("X-UpNut-OneOfSources"))
                         ?.split(',')
                         ?.mapNotNull(String::uuidOrNull)
 
-                    val limit = (parameters["limit"]?.toIntOrNull() ?: call.request.header("X-UpNut-Limit")?.toIntOrNull())?.coerceIn(1, 50) ?: 50
+                    val noneOfSources = (parameters["filter_sources_not"] ?: parameters["none_of_sources"]
+                                         ?: call.request.header("X-UpNut-FilterSourcesNot") ?: call.request.header("X-UpNut-NoneOfSources"))
+                        ?.split(',')
+                        ?.mapNotNull(String::uuidOrNull)
 
-                    val nuts = when {
-                        filterSources != null -> upnut.globalHotInSources(time = time, limit = limit, filterSources)
-                        filterSourcesNot != null -> upnut.globalHotNotInSources(time = time, limit = limit, filterSourcesNot)
-                        else -> upnut.globalHot(time = time, limit = limit)
-                    }?.mapNotNull { map ->
-                        (map["feed_id"] as? UUID)?.let { feedID ->
-                            (map["sum"] as? Number)?.let { sum ->
-                                Pair(feedID, sum.toInt())
+                    val oneOfProviders = (parameters["filter_providers"] ?: parameters["one_of_providers"]
+                                          ?: call.request.header("X-UpNut-FilterProviders") ?: call.request.header("X-UpNut-OneOfProviders"))
+                        ?.split(',')
+                        ?.mapNotNull(String::uuidOrNull)
+
+                    val noneOfProviders = (parameters["filter_providers_not"] ?: parameters["none_of_providers"]
+                                           ?: call.request.header("X-UpNut-FilterProvidersNot") ?: call.request.header("X-UpNut-NoneOfProviders"))
+                        ?.split(',')
+                        ?.mapNotNull(String::uuidOrNull)
+
+                    http.getAsResult<List<UpNutEvent>>("https://api.sibr.dev/eventually/events") {
+                        url.parameters.appendAll(parameters)
+                    }.map { list ->
+                        val feedEventSources = list.map(UpNutEvent::id)
+                        val map = upnut.eventually(feedEventSources, time, noneOfProviders, noneOfSources, oneOfProviders, oneOfSources) ?: emptyMap()
+
+                        val upnuts =
+                            player?.let { upnut.isUpnutted(feedEventSources, time, it) } ?: emptyMap()
+
+                        list.map inner@{ event ->
+                            val metadata: JsonElement =
+                                if (upnuts[event.id] == true) {
+                                    when (val metadata = event.metadata) {
+                                        is JsonObject -> JsonObject(metadata + Pair("upnut", JsonPrimitive(true)))
+                                        is JsonNull -> JsonObject(mapOf("upnut" to JsonPrimitive(true)))
+                                        else -> event.metadata
+                                    }
+                                } else event.metadata
+
+                            map[event.id]?.let {
+                                if (it != event.nuts.intOrNull)
+                                    return@inner event.copy(nuts = JsonPrimitive(it), metadata = metadata)
+                            }
+
+                            return@inner event.copy(metadata = metadata)
+                        }
+                    }
+                }.respond(call)
+            }
+
+            get("/nuts") {
+                val parameters = call.request.queryParameters
+
+                val cacheKey = parameters.toStableString()
+
+                eventsNutCache.getAsync(cacheKey, scope = this) {
+                    val time = parameters["time"]?.let { time ->
+                        time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
+                    } ?: call.request.header("X-UpNut-Time")?.let { time ->
+                        time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
+                    } ?: Instant.now(Clock.systemUTC()).toEpochMilli()
+
+                    val oneOfSources = (parameters["filter_sources"] ?: parameters["one_of_sources"]
+                                        ?: call.request.header("X-UpNut-FilterSources") ?: call.request.header("X-UpNut-OneOfSources"))
+                        ?.split(',')
+                        ?.mapNotNull(String::uuidOrNull)
+
+                    val noneOfSources = (parameters["filter_sources_not"] ?: parameters["none_of_sources"]
+                                         ?: call.request.header("X-UpNut-FilterSourcesNot") ?: call.request.header("X-UpNut-NoneOfSources"))
+                        ?.split(',')
+                        ?.mapNotNull(String::uuidOrNull)
+
+                    val oneOfProviders = (parameters["filter_providers"] ?: parameters["one_of_providers"]
+                                          ?: call.request.header("X-UpNut-FilterProviders") ?: call.request.header("X-UpNut-OneOfProviders"))
+                        ?.split(',')
+                        ?.mapNotNull(String::uuidOrNull)
+
+                    val noneOfProviders = (parameters["filter_providers_not"] ?: parameters["none_of_providers"]
+                                           ?: call.request.header("X-UpNut-FilterProvidersNot") ?: call.request.header("X-UpNut-NoneOfProviders"))
+                        ?.split(',')
+                        ?.mapNotNull(String::uuidOrNull)
+
+                    val formatAsDateTime = (parameters["time_format"] ?: call.request.header("X-UpNut-TimeFormat")) ==
+                            "datetime"
+
+                    http.getAsResult<List<UpNutEvent>>("https://api.sibr.dev/eventually/events") {
+                        url.parameters.appendAll(parameters)
+                    }.map { list ->
+                        val map = upnut.eventuallyNutsList(list.map(UpNutEvent::id), time, noneOfProviders, noneOfSources, oneOfProviders, oneOfSources) ?: emptyMap()
+
+                        list.map { event ->
+                            val nuts = map[event.id]
+
+                            if (formatAsDateTime) {
+                                NutDateTimeEvent(
+                                    event.id,
+                                    event.playerTags,
+                                    event.teamTags,
+                                    event.gameTags,
+                                    event.created,
+                                    event.season,
+                                    event.tournament,
+                                    event.type,
+                                    event.day,
+                                    event.phase,
+                                    event.category,
+                                    event.description,
+                                    nuts?.map { (nuts, provider, source, time) -> NutsDateTime(nuts, provider, source, BLASEBALL_TIME_PATTERN.format(DateTime.fromUnix(time))) } ?: emptyList(),
+                                    event.metadata
+                                )
+                            } else {
+                                NutEpochEvent(
+                                    event.id,
+                                    event.playerTags,
+                                    event.teamTags,
+                                    event.gameTags,
+                                    event.created,
+                                    event.season,
+                                    event.tournament,
+                                    event.type,
+                                    event.day,
+                                    event.phase,
+                                    event.category,
+                                    event.description,
+                                    nuts ?: emptyList(),
+                                    event.metadata
+                                )
                             }
                         }
                     }
+                }.respond(call)
+            }
 
-                    if (nuts == null) {
-                        call.respondJsonObject(HttpStatusCode.BadRequest) {
-                            put("error", "No PSQL Results")
+            route("/feed") {
+                route("/hot") {
+                    get("/global") { processGlobal(feedHotGlobalCache, upnut::globalHot) }
+
+                    get("/team") { processFiltered(feedHotTeamCache, upnut::teamHot) }
+
+                    get("/game") { processFiltered(feedHotGameCache, upnut::gameHot) }
+
+                    get("/player") { processFiltered(feedHotPlayerCache, upnut::playerHot) }
+                }
+
+                route("/top") {
+                    get("/global") { processGlobal(feedTopGlobalCache, upnut::globalTop) }
+
+                    get("/team") { processFiltered(feedTopTeamCache, upnut::teamTop) }
+
+                    get("/game") { processFiltered(feedTopGameCache, upnut::gameTop) }
+
+                    get("/player") { processFiltered(feedTopPlayerCache, upnut::playerTop) }
+                }
+
+                get("/global") {
+                    val category = call.parameters["category"]?.toIntOrNull()
+                    val limit = call.parameters["limit"]?.toIntOrNull() ?: 100
+                    val type = call.parameters["type"]?.toIntOrNull()
+                    val sort = call.parameters["sort"]?.toIntOrNull()
+                    val start = call.parameters["start"]?.toIntOrNull()
+                    val time = call.parameters["time"]?.let { time ->
+                        time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
+                    } ?: call.request.header("X-UpNut-Time")?.let { time ->
+                        time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
+                    } ?: Instant.now(Clock.systemUTC()).toEpochMilli()
+
+                    val player = (call.parameters["player"] ?: call.request.header("X-UpNut-Player"))?.uuidOrNull()
+
+                    when (sort) {
+                        /** Newest */
+                        0 -> call.respondRedirect(false) {
+                            path("/events")
+                            with(parameters) {
+                                append("before", (time / 1000).toString())
+                                append("limit", limit.toString())
+
+                                append("time", time.toString())
+
+                                if (player != null) append("player", player.toString())
+
+                                if (category != null) append("category", category.toString())
+                                if (type != null) append("type", type.toString())
+                                if (start != null) append("offset", start.toString())
+
+                                append("sortorder", "desc")
+                            }
                         }
-                    } else {
-                        http.getAsResult<List<UpNutEvent>>("https://api.sibr.dev/eventually/events") {
-                            parameter("ids", nuts.joinToString(",") { it.first.toString() })
-                        }.map { list ->
-                            val map = list.associateBy(UpNutEvent::id)
+                        /** Oldest */
+                        1 -> call.respondRedirect(false) {
+                            path("/events")
+                            with(parameters) {
+                                append("before", (time / 1000).toString())
+                                append("limit", limit.toString())
 
-                            nuts.mapNotNull { (feedID, nuts) -> map[feedID]?.copy(nuts = JsonPrimitive(nuts)) }
-                        }.respond(call)
+                                append("time", time.toString())
+
+                                if (player != null) append("player", player.toString())
+
+                                if (category != null) append("category", category.toString())
+                                if (type != null) append("type", type.toString())
+                                if (start != null) append("offset", start.toString())
+
+                                append("sortorder", "asc")
+                            }
+                        }
+                        /** Top */
+                        2 -> call.respondRedirect(false) {
+                            path("/feed/top/global")
+                            with(parameters) {
+                                append("limit", limit.toString())
+                                append("time", time.toString())
+
+                                if (player != null) append("player", player.toString())
+
+                                if (category != null) append("category", category.toString())
+                                if (type != null) append("type", type.toString())
+                                if (start != null) append("offset", start.toString())
+                            }
+                        }
+                        /** Hot */
+                        else -> call.respondRedirect(false) {
+                            path("/feed/hot/global")
+                            with(parameters) {
+                                append("limit", limit.toString())
+                                append("time", time.toString())
+
+                                if (player != null) append("player", player.toString())
+
+                                if (category != null) append("category", category.toString())
+                                if (type != null) append("type", type.toString())
+                                if (start != null) append("offset", start.toString())
+                            }
+                        }
                     }
                 }
 
                 get("/team") {
-                    val parameters = call.request.queryParameters
-
-                    val time = parameters["time"]?.let { time ->
+                    val id = call.parameters["id"] ?: return@get call.respondJsonObject(HttpStatusCode.BadRequest) { put("error", "No ID provided") }
+                    val category = call.parameters["category"]?.toIntOrNull()
+                    val limit = call.parameters["limit"]?.toIntOrNull() ?: 100
+                    val type = call.parameters["type"]?.toIntOrNull()
+                    val sort = call.parameters["sort"]?.toIntOrNull()
+                    val start = call.parameters["start"]?.toIntOrNull()
+                    val time = call.parameters["time"]?.let { time ->
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
                     } ?: call.request.header("X-UpNut-Time")?.let { time ->
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
                     } ?: Instant.now(Clock.systemUTC()).toEpochMilli()
-                    val filterSources = (parameters["filter_sources"] ?: call.request.header("X-UpNut-FilterSources"))
-                        ?.split(',')
-                        ?.mapNotNull(String::uuidOrNull)
-                    val filterSourcesNot = (parameters["filter_sources_not"] ?: call.request.header("X-UpNut-FilterSourcesNot"))
-                        ?.split(',')
-                        ?.mapNotNull(String::uuidOrNull)
 
-                    val teamID = (parameters["id"] ?: call.request.header("X-UpNut-ID")).uuidOrNull()
-                                 ?: return@get call.respondJsonObject(HttpStatusCode.BadRequest) {
-                                     put("error", "No ID passed via query parameter (id) or header (X-UpNut-ID)")
-                                 }
+                    val player = (call.parameters["player"] ?: call.request.header("X-UpNut-Player"))?.uuidOrNull()
 
-                    val limit = (parameters["limit"]?.toIntOrNull() ?: call.request.header("X-UpNut-Limit")?.toIntOrNull())?.coerceIn(1, 50) ?: 50
+                    when (sort) {
+                        /** Newest */
+                        0 -> call.respondRedirect(false) {
+                            path("/events")
+                            with(parameters) {
+                                append("before", (time / 1000).toString())
+                                append("limit", limit.toString())
 
-                    val nuts = when {
-                        filterSources != null -> upnut.teamHotInSources(teamID, time = time, limit = limit, filterSources)
-                        filterSourcesNot != null -> upnut.teamHotNotInSources(teamID, time = time, limit = limit, filterSourcesNot)
-                        else -> upnut.teamHot(teamID, time = time, limit = limit)
-                    }?.mapNotNull { map ->
-                        (map["feed_id"] as? UUID)?.let { feedID ->
-                            (map["sum"] as? Number)?.let { sum ->
-                                Pair(feedID, sum.toInt())
+                                append("time", time.toString())
+
+                                if (player != null) append("player", player.toString())
+
+                                if (category != null) append("category", category.toString())
+                                if (type != null) append("type", type.toString())
+                                if (start != null) append("offset", start.toString())
+
+                                append("teamTags", id)
+
+                                append("sortorder", "desc")
                             }
                         }
-                    }
+                        /** Oldest */
+                        1 -> call.respondRedirect(false) {
+                            path("/events")
+                            with(parameters) {
+                                append("before", (time / 1000).toString())
+                                append("limit", limit.toString())
 
-                    if (nuts == null) {
-                        call.respondJsonObject(HttpStatusCode.BadRequest) {
-                            put("error", "No PSQL Results")
-                        }
-                    } else {
-                        http.getAsResult<List<UpNutEvent>>("https://api.sibr.dev/eventually/events") {
-                            parameter("ids", nuts.joinToString(",") { it.first.toString() })
-                        }.map { list ->
-                            val map = list.associateBy(UpNutEvent::id)
+                                append("time", time.toString())
 
-                            nuts.mapNotNull { (feedID, nuts) -> map[feedID]?.copy(nuts = JsonPrimitive(nuts)) }
-                        }.respond(call)
-                    }
-                }
+                                if (player != null) append("player", player.toString())
 
-                get("/game") {
-                    val parameters = call.request.queryParameters
+                                if (category != null) append("category", category.toString())
+                                if (type != null) append("type", type.toString())
+                                if (start != null) append("offset", start.toString())
 
-                    val time = parameters["time"]?.let { time ->
-                        time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
-                    } ?: call.request.header("X-UpNut-Time")?.let { time ->
-                        time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
-                    } ?: Instant.now(Clock.systemUTC()).toEpochMilli()
-                    val filterSources = (parameters["filter_sources"] ?: call.request.header("X-UpNut-FilterSources"))
-                        ?.split(',')
-                        ?.mapNotNull(String::uuidOrNull)
-                    val filterSourcesNot = (parameters["filter_sources_not"] ?: call.request.header("X-UpNut-FilterSourcesNot"))
-                        ?.split(',')
-                        ?.mapNotNull(String::uuidOrNull)
+                                append("teamTags", id)
 
-                    val gameID = parameters["id"]
-                                 ?: call.request.header("X-UpNut-ID")
-                                 ?: return@get call.respondJsonObject(HttpStatusCode.BadRequest) {
-                                     put("error", "No ID passed via query parameter (id) or header (X-UpNut-ID)")
-                                 }
-
-                    val limit = (parameters["limit"]?.toIntOrNull() ?: call.request.header("X-UpNut-Limit")?.toIntOrNull())?.coerceIn(1, 50) ?: 50
-
-                    val nuts = when {
-                        filterSources != null -> {
-                            upnut.client.sql("SELECT * FROM (SELECT feed_id, SUM(nuts) AS sum, MAX(time) as time FROM upnuts WHERE time <= $1 AND source IN ($2) AND feed_id IN (SELECT feed_id FROM game_nuts WHERE game_id = $3) GROUP BY feed_id ORDER BY time DESC, sum DESC LIMIT $4) as list ORDER BY list.sum DESC")
-                                .bind("$1", time)
-                                .bind("$2", filterSources)
-                                .bind("$3", gameID)
-                                .bind("$4", limit)
-                                .fetch()
-                                .all()
-                                .collectList()
-                                .awaitSingleOrNull()
-                        }
-                        filterSourcesNot != null -> {
-                            upnut.client.sql("SELECT * FROM (SELECT feed_id, SUM(nuts) AS sum, MAX(time) as time FROM upnuts WHERE time <= $1 AND source NOT IN ($2) AND feed_id IN (SELECT feed_id FROM game_nuts WHERE game_id = $3) GROUP BY feed_id ORDER BY time DESC, sum DESC LIMIT $4) as list ORDER BY list.sum DESC")
-                                .bind("$1", time)
-                                .bind("$2", filterSourcesNot)
-                                .bind("$3", gameID)
-                                .bind("$4", limit)
-                                .fetch()
-                                .all()
-                                .collectList()
-                                .awaitSingleOrNull()
-                        }
-                        else -> {
-                            upnut.client.sql("SELECT * FROM (SELECT feed_id, SUM(nuts) AS sum, MAX(time) as time FROM upnuts WHERE time <= $1 AND feed_id IN (SELECT feed_id FROM game_nuts WHERE game_id = $2) GROUP BY feed_id ORDER BY time DESC, sum DESC LIMIT $3) as list ORDER BY list.sum DESC")
-                                .bind("$1", time)
-                                .bind("$2", gameID)
-                                .bind("$3", limit)
-                                .fetch()
-                                .all()
-                                .collectList()
-                                .awaitSingleOrNull()
-                        }
-                    }?.mapNotNull { map ->
-                        (map["feed_id"] as? UUID)?.let { feedID ->
-                            (map["sum"] as? Number)?.let { sum ->
-                                Pair(feedID, sum.toInt())
+                                append("sortorder", "asc")
                             }
                         }
-                    }
+                        /** Top */
+                        2 -> call.respondRedirect(false) {
+                            path("/feed/top/team")
+                            with(parameters) {
+                                append("limit", limit.toString())
+                                append("time", time.toString())
 
-                    if (nuts == null) {
-                        call.respondJsonObject(HttpStatusCode.BadRequest) {
-                            put("error", "No PSQL Results")
+                                if (player != null) append("player", player.toString())
+
+                                if (category != null) append("category", category.toString())
+                                if (type != null) append("type", type.toString())
+                                if (start != null) append("offset", start.toString())
+
+                                append("id", id)
+                            }
                         }
-                    } else {
-                        http.getAsResult<List<UpNutEvent>>("https://api.sibr.dev/eventually/events") {
-                            parameter("ids", nuts.joinToString(",") { it.first.toString() })
-                        }.map { list ->
-                            val map = list.associateBy(UpNutEvent::id)
+                        /** Hot */
+                        else -> call.respondRedirect(false) {
+                            path("/feed/hot/team")
+                            with(parameters) {
+                                append("limit", limit.toString())
+                                append("time", time.toString())
 
-                            nuts.mapNotNull { (feedID, nuts) -> map[feedID]?.copy(nuts = JsonPrimitive(nuts)) }
-                        }.respond(call)
+                                if (player != null) append("player", player.toString())
+
+                                if (category != null) append("category", category.toString())
+                                if (type != null) append("type", type.toString())
+                                if (start != null) append("offset", start.toString())
+
+                                append("id", id)
+                            }
+                        }
                     }
                 }
 
                 get("/player") {
-                    val parameters = call.request.queryParameters
-
-                    val time = parameters["time"]?.let { time ->
+                    val id = call.parameters["id"] ?: return@get call.respondJsonObject(HttpStatusCode.BadRequest) { put("error", "No ID provided") }
+                    val category = call.parameters["category"]?.toIntOrNull()
+                    val limit = call.parameters["limit"]?.toIntOrNull() ?: 100
+                    val type = call.parameters["type"]?.toIntOrNull()
+                    val sort = call.parameters["sort"]?.toIntOrNull()
+                    val start = call.parameters["start"]?.toIntOrNull()
+                    val time = call.parameters["time"]?.let { time ->
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
                     } ?: call.request.header("X-UpNut-Time")?.let { time ->
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
                     } ?: Instant.now(Clock.systemUTC()).toEpochMilli()
-                    val filterSources = (parameters["filter_sources"] ?: call.request.header("X-UpNut-FilterSources"))
-                        ?.split(',')
-                        ?.mapNotNull(String::uuidOrNull)
-                    val filterSourcesNot = (parameters["filter_sources_not"] ?: call.request.header("X-UpNut-FilterSourcesNot"))
-                        ?.split(',')
-                        ?.mapNotNull(String::uuidOrNull)
 
-                    val playerID = parameters["id"]
-                                   ?: call.request.header("X-UpNut-ID")
-                                   ?: return@get call.respondJsonObject(HttpStatusCode.BadRequest) {
-                                       put("error", "No ID passed via query parameter (id) or header (X-UpNut-ID)")
-                                   }
+                    val player = (call.parameters["player"] ?: call.request.header("X-UpNut-Player"))?.uuidOrNull()
 
-                    val limit = (parameters["limit"]?.toIntOrNull() ?: call.request.header("X-UpNut-Limit")?.toIntOrNull())?.coerceIn(1, 50) ?: 50
+                    when (sort) {
+                        /** Newest */
+                        0 -> call.respondRedirect(false) {
+                            path("/events")
+                            with(parameters) {
+                                append("before", (time / 1000).toString())
+                                append("limit", limit.toString())
 
-                    val nuts = when {
-                        filterSources != null -> {
-                            upnut.client.sql("SELECT * FROM (SELECT feed_id, SUM(nuts) AS sum, MAX(time) as time FROM upnuts WHERE time <= $1 AND source IN ($2) AND feed_id IN (SELECT feed_id FROM player_nuts WHERE player_id = $3) GROUP BY feed_id ORDER BY time DESC, sum DESC LIMIT $4) as list ORDER BY list.sum DESC")
-                                .bind("$1", time)
-                                .bind("$2", filterSources)
-                                .bind("$3", playerID)
-                                .bind("$4", limit)
-                                .fetch()
-                                .all()
-                                .collectList()
-                                .awaitSingleOrNull()
-                        }
-                        filterSourcesNot != null -> {
-                            upnut.client.sql("SELECT * FROM (SELECT feed_id, SUM(nuts) AS sum, MAX(time) as time FROM upnuts WHERE time <= $1 AND source NOT IN ($2) AND feed_id IN (SELECT feed_id FROM player_nuts WHERE player_id = $3) GROUP BY feed_id ORDER BY time DESC, sum DESC LIMIT $4) as list ORDER BY list.sum DESC")
-                                .bind("$1", time)
-                                .bind("$2", filterSourcesNot)
-                                .bind("$3", playerID)
-                                .bind("$4", limit)
-                                .fetch()
-                                .all()
-                                .collectList()
-                                .awaitSingleOrNull()
-                        }
-                        else -> {
-                            upnut.client.sql("SELECT * FROM (SELECT feed_id, SUM(nuts) AS sum, MAX(time) as time FROM upnuts WHERE time <= $1 AND feed_id IN (SELECT feed_id FROM player_nuts WHERE player_id = $2) GROUP BY feed_id ORDER BY time DESC, sum DESC LIMIT $3) as list ORDER BY list.sum DESC")
-                                .bind("$1", time)
-                                .bind("$2", playerID)
-                                .bind("$3", limit)
-                                .fetch()
-                                .all()
-                                .collectList()
-                                .awaitSingleOrNull()
-                        }
-                    }?.mapNotNull { map ->
-                        (map["feed_id"] as? UUID)?.let { feedID ->
-                            (map["sum"] as? Number)?.let { sum ->
-                                Pair(feedID, sum.toInt())
+                                append("time", time.toString())
+
+                                if (player != null) append("player", player.toString())
+
+                                if (category != null) append("category", category.toString())
+                                if (type != null) append("type", type.toString())
+                                if (start != null) append("offset", start.toString())
+
+                                append("playerTags", id)
+
+                                append("sortorder", "desc")
                             }
                         }
-                    }
+                        /** Oldest */
+                        1 -> call.respondRedirect(false) {
+                            path("/events")
+                            with(parameters) {
+                                append("before", (time / 1000).toString())
+                                append("limit", limit.toString())
 
-                    if (nuts == null) {
-                        call.respondJsonObject(HttpStatusCode.BadRequest) {
-                            put("error", "No PSQL Results")
-                        }
-                    } else {
-                        http.getAsResult<List<UpNutEvent>>("https://api.sibr.dev/eventually/events") {
-                            parameter("ids", nuts.joinToString(",") { it.first.toString() })
-                        }.map { list ->
-                            val map = list.associateBy(UpNutEvent::id)
+                                append("time", time.toString())
 
-                            nuts.mapNotNull { (feedID, nuts) -> map[feedID]?.copy(nuts = JsonPrimitive(nuts)) }
-                        }.respond(call)
-                    }
-                }
-            }
+                                if (player != null) append("player", player.toString())
 
-            route("/top") {
-                get("/global") {
-                    val parameters = call.request.queryParameters
+                                if (category != null) append("category", category.toString())
+                                if (type != null) append("type", type.toString())
+                                if (start != null) append("offset", start.toString())
 
-                    val time = parameters["time"]?.let { time ->
-                        time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
-                    } ?: call.request.header("X-UpNut-Time")?.let { time ->
-                        time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
-                    } ?: Instant.now(Clock.systemUTC()).toEpochMilli()
-                    val filterSources = (parameters["filter_sources"] ?: call.request.header("X-UpNut-FilterSources"))
-                        ?.split(',')
-                        ?.mapNotNull(String::uuidOrNull)
-                    val filterSourcesNot = (parameters["filter_sources_not"] ?: call.request.header("X-UpNut-FilterSourcesNot"))
-                        ?.split(',')
-                        ?.mapNotNull(String::uuidOrNull)
+                                append("playerTags", id)
 
-                    val limit = (parameters["limit"]?.toIntOrNull() ?: call.request.header("X-UpNut-Limit")?.toIntOrNull())?.coerceIn(1, 50) ?: 50
-
-                    val nuts = when {
-                        filterSources != null -> {
-                            upnut.client.sql("SELECT feed_id, SUM(nuts) AS sum FROM upnuts WHERE time <= $1 AND source IN ($2) GROUP BY feed_id ORDER BY sum DESC LIMIT $3")
-                                .bind("$1", time)
-                                .bind("$2", filterSources)
-                                .bind("$3", limit)
-                                .fetch()
-                                .all()
-                                .collectList()
-                                .awaitSingleOrNull()
-                        }
-                        filterSourcesNot != null -> {
-                            upnut.client.sql("SELECT feed_id, SUM(nuts) AS sum FROM upnuts WHERE time <= $1 AND source NOT IN ($2) GROUP BY feed_id ORDER BY sum DESC LIMIT $3")
-                                .bind("$1", time)
-                                .bind("$2", filterSourcesNot)
-                                .bind("$3", limit)
-                                .fetch()
-                                .all()
-                                .collectList()
-                                .awaitSingleOrNull()
-                        }
-                        else -> {
-                            upnut.client.sql("SELECT feed_id, SUM(nuts) AS sum FROM upnuts WHERE time <= $1 GROUP BY feed_id ORDER BY sum DESC LIMIT $2")
-                                .bind("$1", time)
-                                .bind("$2", limit)
-                                .fetch()
-                                .all()
-                                .collectList()
-                                .awaitSingleOrNull()
-                        }
-                    }?.mapNotNull { map ->
-                        (map["feed_id"] as? UUID)?.let { feedID ->
-                            (map["sum"] as? Number)?.let { sum ->
-                                Pair(feedID, sum.toInt())
+                                append("sortorder", "asc")
                             }
                         }
-                    }
+                        /** Top */
+                        2 -> call.respondRedirect(false) {
+                            path("/feed/top/player")
+                            with(parameters) {
+                                append("limit", limit.toString())
+                                append("time", time.toString())
 
-                    if (nuts == null) {
-                        call.respondJsonObject(HttpStatusCode.BadRequest) {
-                            put("error", "No PSQL Results")
-                        }
-                    } else {
-                        http.getAsResult<List<UpNutEvent>>("https://api.sibr.dev/eventually/events") {
-                            parameter("ids", nuts.joinToString(",") { it.first.toString() })
-                        }.map { list ->
-                            val map = list.associateBy(UpNutEvent::id)
+                                if (player != null) append("player", player.toString())
 
-                            nuts.mapNotNull { (feedID, nuts) -> map[feedID]?.copy(nuts = JsonPrimitive(nuts)) }
-                        }.respond(call)
-                    }
-                }
+                                if (category != null) append("category", category.toString())
+                                if (type != null) append("type", type.toString())
+                                if (start != null) append("offset", start.toString())
 
-                get("/team") {
-                    val parameters = call.request.queryParameters
-
-                    val time = parameters["time"]?.let { time ->
-                        time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
-                    } ?: call.request.header("X-UpNut-Time")?.let { time ->
-                        time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
-                    } ?: Instant.now(Clock.systemUTC()).toEpochMilli()
-                    val filterSources = (parameters["filter_sources"] ?: call.request.header("X-UpNut-FilterSources"))
-                        ?.split(',')
-                        ?.mapNotNull(String::uuidOrNull)
-                    val filterSourcesNot = (parameters["filter_sources_not"] ?: call.request.header("X-UpNut-FilterSourcesNot"))
-                        ?.split(',')
-                        ?.mapNotNull(String::uuidOrNull)
-
-                    val teamID = parameters["id"]
-                                 ?: call.request.header("X-UpNut-ID")
-                                 ?: return@get call.respondJsonObject(HttpStatusCode.BadRequest) {
-                                     put("error", "No ID passed via query parameter (id) or header (X-UpNut-ID)")
-                                 }
-
-                    val limit = (parameters["limit"]?.toIntOrNull() ?: call.request.header("X-UpNut-Limit")?.toIntOrNull())?.coerceIn(1, 50) ?: 50
-
-                    val nuts = when {
-                        filterSources != null -> {
-                            upnut.client.sql("SELECT feed_id, SUM(nuts) AS sum FROM upnuts WHERE time <= $1 AND source IN ($2) AND feed_id IN (SELECT feed_id FROM team_nuts WHERE team_id = $3) GROUP BY feed_id ORDER BY sum DESC LIMIT $4")
-                                .bind("$1", time)
-                                .bind("$2", filterSources)
-                                .bind("$3", teamID)
-                                .bind("$4", limit)
-                                .fetch()
-                                .all()
-                                .collectList()
-                                .awaitSingleOrNull()
-                        }
-                        filterSourcesNot != null -> {
-                            upnut.client.sql("SELECT feed_id, SUM(nuts) AS sum FROM upnuts WHERE time <= $1 AND source NOT IN ($2) AND feed_id IN (SELECT feed_id FROM team_nuts WHERE team_id = $3) GROUP BY feed_id ORDER BY sum DESC LIMIT $4")
-                                .bind("$1", time)
-                                .bind("$2", filterSourcesNot)
-                                .bind("$3", teamID)
-                                .bind("$4", limit)
-                                .fetch()
-                                .all()
-                                .collectList()
-                                .awaitSingleOrNull()
-                        }
-                        else -> {
-                            upnut.client.sql("SELECT feed_id, SUM(nuts) AS sum FROM upnuts WHERE time <= $1 AND feed_id IN (SELECT feed_id FROM team_nuts WHERE team_id = $2) GROUP BY feed_id ORDER BY sum DESC LIMIT $3")
-                                .bind("$1", time)
-                                .bind("$2", teamID)
-                                .bind("$3", limit)
-                                .fetch()
-                                .all()
-                                .collectList()
-                                .awaitSingleOrNull()
-                        }
-                    }?.mapNotNull { map ->
-                        (map["feed_id"] as? UUID)?.let { feedID ->
-                            (map["sum"] as? Number)?.let { sum ->
-                                Pair(feedID, sum.toInt())
+                                append("id", id)
                             }
                         }
-                    }
+                        /** Hot */
+                        else -> call.respondRedirect(false) {
+                            path("/feed/hot/player")
+                            with(parameters) {
+                                append("limit", limit.toString())
+                                append("time", time.toString())
 
-                    if (nuts == null) {
-                        call.respondJsonObject(HttpStatusCode.BadRequest) {
-                            put("error", "No PSQL Results")
+                                if (player != null) append("player", player.toString())
+
+                                if (category != null) append("category", category.toString())
+                                if (type != null) append("type", type.toString())
+                                if (start != null) append("offset", start.toString())
+
+                                append("id", id)
+                            }
                         }
-                    } else {
-                        http.getAsResult<List<UpNutEvent>>("https://api.sibr.dev/eventually/events") {
-                            parameter("ids", nuts.joinToString(",") { it.first.toString() })
-                        }.map { list ->
-                            val map = list.associateBy(UpNutEvent::id)
-
-                            nuts.mapNotNull { (feedID, nuts) -> map[feedID]?.copy(nuts = JsonPrimitive(nuts)) }
-                        }.respond(call)
                     }
                 }
 
                 get("/game") {
-                    val parameters = call.request.queryParameters
-
-                    val time = parameters["time"]?.let { time ->
+                    val id = call.parameters["id"] ?: return@get call.respondJsonObject(HttpStatusCode.BadRequest) { put("error", "No ID provided") }
+                    val category = call.parameters["category"]?.toIntOrNull()
+                    val limit = call.parameters["limit"]?.toIntOrNull() ?: 100
+                    val type = call.parameters["type"]?.toIntOrNull()
+                    val sort = call.parameters["sort"]?.toIntOrNull()
+                    val start = call.parameters["start"]?.toIntOrNull()
+                    val time = call.parameters["time"]?.let { time ->
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
                     } ?: call.request.header("X-UpNut-Time")?.let { time ->
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
                     } ?: Instant.now(Clock.systemUTC()).toEpochMilli()
-                    val filterSources = (parameters["filter_sources"] ?: call.request.header("X-UpNut-FilterSources"))
-                        ?.split(',')
-                        ?.mapNotNull(String::uuidOrNull)
-                    val filterSourcesNot = (parameters["filter_sources_not"] ?: call.request.header("X-UpNut-FilterSourcesNot"))
-                        ?.split(',')
-                        ?.mapNotNull(String::uuidOrNull)
 
-                    val gameID = parameters["id"]
-                                 ?: call.request.header("X-UpNut-ID")
-                                 ?: return@get call.respondJsonObject(HttpStatusCode.BadRequest) {
-                                     put("error", "No ID passed via query parameter (id) or header (X-UpNut-ID)")
-                                 }
+                    val player = (call.parameters["player"] ?: call.request.header("X-UpNut-Player"))?.uuidOrNull()
 
-                    val limit = (parameters["limit"]?.toIntOrNull() ?: call.request.header("X-UpNut-Limit")?.toIntOrNull())?.coerceIn(1, 50) ?: 50
+                    when (sort) {
+                        /** Newest */
+                        0 -> call.respondRedirect(false) {
+                            path("/events")
+                            with(parameters) {
+                                append("before", (time / 1000).toString())
+                                append("limit", limit.toString())
 
-                    val nuts = when {
-                        filterSources != null -> {
-                            upnut.client.sql("SELECT feed_id, SUM(nuts) AS sum FROM upnuts WHERE time <= $1 AND source IN ($2) AND feed_id IN (SELECT feed_id FROM game_nuts WHERE game_id = $3) GROUP BY feed_id ORDER BY sum DESC LIMIT $4")
-                                .bind("$1", time)
-                                .bind("$2", filterSources)
-                                .bind("$3", gameID)
-                                .bind("$4", limit)
-                                .fetch()
-                                .all()
-                                .collectList()
-                                .awaitSingleOrNull()
-                        }
-                        filterSourcesNot != null -> {
-                            upnut.client.sql("SELECT feed_id, SUM(nuts) AS sum FROM upnuts WHERE time <= $1 AND source NOT IN ($2) AND feed_id IN (SELECT feed_id FROM game_nuts WHERE game_id = $3) GROUP BY feed_id ORDER BY sum DESC LIMIT $4")
-                                .bind("$1", time)
-                                .bind("$2", filterSourcesNot)
-                                .bind("$3", gameID)
-                                .bind("$4", limit)
-                                .fetch()
-                                .all()
-                                .collectList()
-                                .awaitSingleOrNull()
-                        }
-                        else -> {
-                            upnut.client.sql("SELECT feed_id, SUM(nuts) AS sum FROM upnuts WHERE time <= $1 AND feed_id IN (SELECT feed_id FROM game_nuts WHERE game_id = $2) GROUP BY feed_id ORDER BY sum DESC LIMIT $3")
-                                .bind("$1", time)
-                                .bind("$2", gameID)
-                                .bind("$3", limit)
-                                .fetch()
-                                .all()
-                                .collectList()
-                                .awaitSingleOrNull()
-                        }
-                    }?.mapNotNull { map ->
-                        (map["feed_id"] as? UUID)?.let { feedID ->
-                            (map["sum"] as? Number)?.let { sum ->
-                                Pair(feedID, sum.toInt())
+                                append("time", time.toString())
+
+                                if (player != null) append("player", player.toString())
+
+                                if (category != null) append("category", category.toString())
+                                if (type != null) append("type", type.toString())
+                                if (start != null) append("offset", start.toString())
+
+                                append("gameTags", id)
+
+                                append("sortorder", "desc")
                             }
                         }
-                    }
+                        /** Oldest */
+                        1 -> call.respondRedirect(false) {
+                            path("/events")
+                            with(parameters) {
+                                append("before", (time / 1000).toString())
+                                append("limit", limit.toString())
 
-                    if (nuts == null) {
-                        call.respondJsonObject(HttpStatusCode.BadRequest) {
-                            put("error", "No PSQL Results")
-                        }
-                    } else {
-                        http.getAsResult<List<UpNutEvent>>("https://api.sibr.dev/eventually/events") {
-                            parameter("ids", nuts.joinToString(",") { it.first.toString() })
-                        }.map { list ->
-                            val map = list.associateBy(UpNutEvent::id)
+                                append("time", time.toString())
 
-                            nuts.mapNotNull { (feedID, nuts) -> map[feedID]?.copy(nuts = JsonPrimitive(nuts)) }
-                        }.respond(call)
-                    }
-                }
+                                if (player != null) append("player", player.toString())
 
-                get("/player") {
-                    val parameters = call.request.queryParameters
+                                if (category != null) append("category", category.toString())
+                                if (type != null) append("type", type.toString())
+                                if (start != null) append("offset", start.toString())
 
-                    val time = parameters["time"]?.let { time ->
-                        time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
-                    } ?: call.request.header("X-UpNut-Time")?.let { time ->
-                        time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
-                    } ?: Instant.now(Clock.systemUTC()).toEpochMilli()
-                    val filterSources = (parameters["filter_sources"] ?: call.request.header("X-UpNut-FilterSources"))
-                        ?.split(',')
-                        ?.mapNotNull(String::uuidOrNull)
-                    val filterSourcesNot = (parameters["filter_sources_not"] ?: call.request.header("X-UpNut-FilterSourcesNot"))
-                        ?.split(',')
-                        ?.mapNotNull(String::uuidOrNull)
+                                append("gameTags", id)
 
-                    val playerID = parameters["id"]
-                                   ?: call.request.header("X-UpNut-ID")
-                                   ?: return@get call.respondJsonObject(HttpStatusCode.BadRequest) {
-                                       put("error", "No ID passed via query parameter (id) or header (X-UpNut-ID)")
-                                   }
-
-                    val limit = (parameters["limit"]?.toIntOrNull() ?: call.request.header("X-UpNut-Limit")?.toIntOrNull())?.coerceIn(1, 50) ?: 50
-
-                    val nuts = when {
-                        filterSources != null -> {
-                            upnut.client.sql("SELECT feed_id, SUM(nuts) AS sum FROM upnuts WHERE time <= $1 AND source IN ($2) AND feed_id IN (SELECT feed_id FROM player_nuts WHERE player_id = $3) GROUP BY feed_id ORDER BY sum DESC LIMIT $4")
-                                .bind("$1", time)
-                                .bind("$2", filterSources)
-                                .bind("$3", playerID)
-                                .bind("$4", limit)
-                                .fetch()
-                                .all()
-                                .collectList()
-                                .awaitSingleOrNull()
-                        }
-                        filterSourcesNot != null -> {
-                            upnut.client.sql("SELECT feed_id, SUM(nuts) AS sum FROM upnuts WHERE time <= $1 AND source NOT IN ($2) AND feed_id IN (SELECT feed_id FROM player_nuts WHERE player_id = $3) GROUP BY feed_id ORDER BY sum DESC LIMIT $4")
-                                .bind("$1", time)
-                                .bind("$2", filterSourcesNot)
-                                .bind("$3", playerID)
-                                .bind("$4", limit)
-                                .fetch()
-                                .all()
-                                .collectList()
-                                .awaitSingleOrNull()
-                        }
-                        else -> {
-                            upnut.client.sql("SELECT feed_id, SUM(nuts) AS sum FROM upnuts WHERE time <= $1 AND feed_id IN (SELECT feed_id FROM player_nuts WHERE player_id = $2) GROUP BY feed_id ORDER BY sum DESC LIMIT $3")
-                                .bind("$1", time)
-                                .bind("$2", playerID)
-                                .bind("$3", limit)
-                                .fetch()
-                                .all()
-                                .collectList()
-                                .awaitSingleOrNull()
-                        }
-                    }?.mapNotNull { map ->
-                        (map["feed_id"] as? UUID)?.let { feedID ->
-                            (map["sum"] as? Number)?.let { sum ->
-                                Pair(feedID, sum.toInt())
+                                append("sortorder", "asc")
                             }
                         }
-                    }
+                        /** Top */
+                        2 -> call.respondRedirect(false) {
+                            path("/feed/top/game")
+                            with(parameters) {
+                                append("limit", limit.toString())
+                                append("time", time.toString())
 
-                    if (nuts == null) {
-                        call.respondJsonObject(HttpStatusCode.BadRequest) {
-                            put("error", "No PSQL Results")
+                                if (player != null) append("player", player.toString())
+
+                                if (category != null) append("category", category.toString())
+                                if (type != null) append("type", type.toString())
+                                if (start != null) append("offset", start.toString())
+
+                                append("id", id)
+                            }
                         }
-                    } else {
-                        http.getAsResult<List<UpNutEvent>>("https://api.sibr.dev/eventually/events") {
-                            parameter("ids", nuts.joinToString(",") { it.first.toString() })
-                        }.map { list ->
-                            val map = list.associateBy(UpNutEvent::id)
+                        /** Hot */
+                        else -> call.respondRedirect(false) {
+                            path("/feed/hot/game")
+                            with(parameters) {
+                                append("limit", limit.toString())
+                                append("time", time.toString())
 
-                            nuts.mapNotNull { (feedID, nuts) -> map[feedID]?.copy(nuts = JsonPrimitive(nuts)) }
-                        }.respond(call)
+                                if (player != null) append("player", player.toString())
+
+                                if (category != null) append("category", category.toString())
+                                if (type != null) append("type", type.toString())
+                                if (start != null) append("offset", start.toString())
+
+                                append("id", id)
+                            }
+                        }
                     }
                 }
             }
+        }
+}
+
+@OptIn(ExperimentalTime::class, kotlin.ExperimentalStdlibApi::class)
+fun Application.module(testing: Boolean = false) {
+    val json = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+    }
+
+    install(ContentNegotiation) {
+        json(json)
+    }
+
+    install(CORS) {
+        anyHost()
+    }
+
+    install(ConditionalHeaders)
+    install(StatusPages) {
+//        exception<Throwable> { cause -> call.respond(HttpStatusCode.InternalServerError, cause.stackTraceToString()) }
+        exception<KorneaResultException> { cause ->
+            val result = cause.result
+            if (result is KorneaHttpResult) call.response.header("X-Response-Source", result.response.request.url.toString())
+            result.respondOnFailure(call)
         }
     }
+    install(CallLogging) {
+        level = Level.INFO
+    }
+
+//    val upnut = BigUpNut(config)
+
+    val upnut = WhatsUpNut()
+
+    routing(upnut::routing)
 }

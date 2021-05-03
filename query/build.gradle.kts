@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "dev.brella"
-version = "1.2.2"
+version = "1.3.0"
 
 repositories {
     mavenCentral()
@@ -62,6 +62,8 @@ dependencies {
     // Uncomment the next line if you want to use RSASSA-PSS (PS256, PS384, PS512) algorithms:
     implementation("org.bouncycastle:bcprov-jdk15on:1.68")
     implementation("io.jsonwebtoken:jjwt-jackson:0.11.2") // or "io.jsonwebtoken:jjwt-gson:0.11.2' for gson
+
+    implementation("com.github.ben-manes.caffeine:caffeine:3.0.1")
 
     testImplementation(kotlin("test-junit"))
 }

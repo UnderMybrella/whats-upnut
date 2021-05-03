@@ -1,4 +1,4 @@
-package dev.brella.blasement.upnut
+package dev.brella.blasement.upnut.common
 
 import com.soywiz.klock.DateTimeTz
 import dev.brella.kornea.blaseball.base.common.json.BlaseballDateTimeSerialiser
@@ -68,23 +68,33 @@ data class NutDateTimeEvent(
 )
 
 @Serializable
-data class NutsEpoch(val nuts: Int, val source: String, val time: Long) {
-    constructor(nuts: Number, source: String, time: Number): this(nuts.toInt(), source, time.toLong())
+data class NutsEpoch(
+    val nuts: Int,
+    val provider: @Serializable(UUIDSerialiser::class) UUID,
+    val source: @Serializable(UUIDSerialiser::class) UUID?,
+    val time: Long
+) {
+    constructor(nuts: Number, provider: UUID, source: UUID?, time: Number) : this(nuts.toInt(), provider, source, time.toLong())
 }
 
 @Serializable
-data class NutsDateTime(val nuts: Int, val source: String, val time: String) {
-    constructor(nuts: Number, source: String, time: String): this(nuts.toInt(), source, time)
+data class NutsDateTime(
+    val nuts: Int,
+    val provider: @Serializable(UUIDSerialiser::class) UUID,
+    val source: @Serializable(UUIDSerialiser::class) UUID?,
+    val time: String
+) {
+    constructor(nuts: Number, provider: UUID, source: UUID?, time: String) : this(nuts.toInt(), provider, source, time)
 }
 
-object UUIDSerialiser: KSerializer<UUID> {
+object UUIDSerialiser : KSerializer<UUID> {
     override val descriptor: SerialDescriptor = String.serializer().descriptor
 
     override fun serialize(encoder: Encoder, value: UUID) = encoder.encodeString(value.toString())
     override fun deserialize(decoder: Decoder): UUID = UUID.fromString(decoder.decodeString())
 }
 
-object UUIDListSerialiser: KSerializer<List<UUID>> {
+object UUIDListSerialiser : KSerializer<List<UUID>> {
     val base = ListSerializer(String.serializer())
 
 

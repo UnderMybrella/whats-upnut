@@ -1,24 +1,69 @@
 package dev.brella.blasement.upnut
 
+import com.github.benmanes.caffeine.cache.AsyncCache
+import com.github.benmanes.caffeine.cache.Cache
+import com.github.benmanes.caffeine.cache.Caffeine
+import dev.brella.blasement.upnut.common.UpNutClient
+import dev.brella.blasement.upnut.common.UpNutEvent
 import dev.brella.kornea.errors.common.KorneaResult
 import dev.brella.kornea.errors.common.doOnFailure
 import dev.brella.kornea.errors.common.doOnSuccess
+import dev.brella.kornea.errors.common.doOnThrown
+import dev.brella.kornea.errors.common.map
 import dev.brella.ktornea.common.KorneaHttpResult
+import dev.brella.ktornea.common.getAsResult
 import io.ktor.application.*
+import io.ktor.client.*
+import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.response.*
+import io.ktor.util.*
 import io.ktor.utils.io.*
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.async
+import kotlinx.coroutines.future.await
+import kotlinx.coroutines.future.future
 import kotlinx.serialization.json.JsonArrayBuilder
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObjectBuilder
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import java.util.*
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CompletionStage
+import java.util.concurrent.Executor
+import java.util.concurrent.TimeUnit
+import java.util.function.BiFunction
+import kotlin.Comparator
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.coroutineContext
 import kotlin.reflect.jvm.jvmName
-import kotlin.time.Duration
-import kotlin.time.ExperimentalTime
-import kotlin.time.measureTime
+
+sealed class KorneaResponseResult: KorneaResult.Failure {
+    abstract val httpResponseCode: HttpStatusCode
+    abstract val contentType: ContentType?
+
+    class UserErrorJson(override val httpResponseCode: HttpStatusCode, val json: JsonElement): KorneaResponseResult() {
+        override val contentType: ContentType = ContentType.Application.Json
+
+        override suspend fun writeTo(call: ApplicationCall) =
+            call.respond(httpResponseCode, json)
+    }
+
+    override fun get(): Nothing = throw IllegalStateException("Failed Response @ $this")
+
+    abstract suspend fun writeTo(call: ApplicationCall)
+}
+
+inline fun buildUserErrorJsonObject(httpResponseCode: HttpStatusCode = HttpStatusCode.BadRequest, builder: JsonObjectBuilder.() -> Unit) =
+    KorneaResponseResult.UserErrorJson(httpResponseCode, buildJsonObject(builder))
 
 suspend inline fun KorneaResult<*>.respondOnFailure(call: ApplicationCall) =
     this.doOnFailure { failure ->
@@ -29,10 +74,13 @@ suspend inline fun KorneaResult<*>.respondOnFailure(call: ApplicationCall) =
                     failure.response.content.copyTo(this)
                 }
             }
+            is KorneaResponseResult -> failure.writeTo(call)
             else -> {
                 call.respond(HttpStatusCode.InternalServerError, buildJsonObject {
                     put("error_type", failure::class.jvmName)
                     put("error", failure.toString())
+
+                    failure.doOnThrown { withException -> put("stack_trace", withException.exception.stackTraceToString()) }
                 })
             }
         }
@@ -52,3 +100,107 @@ public suspend inline fun ApplicationCall.respondJsonObject(statusCode: HttpStat
 
 public suspend inline fun ApplicationCall.respondJsonArray(statusCode: HttpStatusCode = HttpStatusCode.OK, producer: JsonArrayBuilder.() -> Unit) =
     respond(statusCode, buildJsonArray(producer))
+
+object ParametersComparator : Comparator<Pair<String, String>> {
+    override fun compare(o1: Pair<String, String>, o2: Pair<String, String>): Int {
+        val a = o1.first.compareTo(o2.first)
+        if (a != 0) return a
+
+        return o1.second.compareTo(o2.second)
+    }
+}
+
+inline fun Parameters.toStableString(): String =
+    flattenEntries().sortedWith(ParametersComparator)
+        .joinToString("&") { (k, v) -> "$k=$v" }
+
+val DISPATCHER_CACHE = Caffeine.newBuilder()
+    .expireAfterAccess(10, TimeUnit.MINUTES)
+    .buildAsync<Executor, CoroutineDispatcher>(Executor::asCoroutineDispatcher)
+
+typealias KotlinCache<K, V> = Cache<K, Deferred<KorneaResult<V>>>
+
+inline fun <K, V> Caffeine<Any, Any>.buildKotlin(): KotlinCache<K, V> = build()
+
+suspend fun <K, V> KotlinCache<K, V>.getAsync(key: K, scope: CoroutineScope = GlobalScope, context: CoroutineContext = scope.coroutineContext, mappingFunction: suspend (key: K) -> KorneaResult<V>): KorneaResult<V> {
+    try {
+        val result = get(key) { k -> scope.async(context) { mappingFunction(k) } }.await()
+
+        return result.doOnFailure { invalidate(key) }
+    } catch (th: Throwable) {
+        invalidate(key)
+        throw th
+    }
+}
+
+
+suspend fun <K, V> AsyncCache<K, V>.getAsync(key: K, scope: CoroutineScope = GlobalScope, mappingFunction: suspend (key: K) -> V): V {
+    val cache = Caffeine.newBuilder().build<String, String>()
+
+    return get(key) { key: K, executor: Executor ->
+        DISPATCHER_CACHE[executor].thenCompose { dispatcher ->
+            scope.future(dispatcher) { mappingFunction(key) }
+        }
+    }.await()
+}
+
+suspend fun <K, V> AsyncCache<K, V>.getAsyncResult(key: K, scope: CoroutineScope = GlobalScope, mappingFunction: suspend (key: K) -> KorneaResult<V>): V =
+    get(key) { key: K, executor: Executor ->
+        DISPATCHER_CACHE[executor].thenCompose { dispatcher ->
+            scope.future(dispatcher) { mappingFunction(key) }
+                .thenCompose(KorneaResult<V>::getAsStage)
+        }
+    }.await()
+
+suspend fun HttpClient.eventually(
+    nuts: Map<UUID, Int>,
+    upnut: UpNutClient,
+    time: Long,
+    limit: Int,
+    season: Int?,
+    tournament: Int?,
+    type: Int?,
+    day: Int?,
+    phase: Int?,
+    category: Int?
+): KorneaResult<List<UpNutEvent>> {
+    val missingAmount = limit - nuts.size
+    val remainingList = if (missingAmount > 0) upnut.globalEventsBefore(time, missingAmount, nuts.keys) {
+        season(season)
+            .tournament(tournament)
+            .type(type)
+            .day(day)
+            .phase(phase)
+            .category(category)
+    } else emptyList()
+
+    return getAsResult<List<UpNutEvent>>("https://api.sibr.dev/eventually/events") {
+        parameter("ids",
+                  buildString {
+                      nuts.keys.joinTo(this, ",")
+                      if (remainingList.isNotEmpty()) {
+                          if (nuts.isNotEmpty()) append(',')
+                          remainingList.joinTo(this, ",")
+                      }
+                  }
+        )
+    }.map { list ->
+        val map = list.associateBy(UpNutEvent::id)
+        val list: MutableList<UpNutEvent> = ArrayList(limit)
+
+        nuts.entries.mapNotNullTo(list) { (feedID, nuts) -> map[feedID]?.copy(nuts = JsonPrimitive(nuts)) }
+        remainingList.mapNotNullTo(list) { uuid -> map[uuid]?.copy(nuts = JsonPrimitive(0)) }
+
+        list
+    }
+}
+
+class KorneaResultException(val result: KorneaResult<*>) : Throwable((result as? KorneaResult.WithException<*>)?.exception)
+
+inline fun <T> KorneaResult<T>.getOrThrow(): T =
+    if (this is KorneaResult.Success<T>) get()
+    else throw KorneaResultException(this)
+
+inline fun <T> KorneaResult<T>.getAsStage(): CompletionStage<T> =
+    if (this is KorneaResult.Success<T>) CompletableFuture.completedStage(get())
+    else CompletableFuture.failedStage(KorneaResultException(this))
