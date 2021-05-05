@@ -21,6 +21,7 @@ import io.ktor.request.*
 import io.ktor.response.*
 import io.ktor.util.*
 import io.ktor.utils.io.*
+import io.netty.handler.codec.http.QueryStringDecoder
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
@@ -31,6 +32,8 @@ import kotlinx.coroutines.future.await
 import kotlinx.coroutines.future.future
 import kotlinx.serialization.json.JsonArrayBuilder
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -47,11 +50,11 @@ import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.coroutineContext
 import kotlin.reflect.jvm.jvmName
 
-sealed class KorneaResponseResult: KorneaResult.Failure {
+sealed class KorneaResponseResult : KorneaResult.Failure {
     abstract val httpResponseCode: HttpStatusCode
     abstract val contentType: ContentType?
 
-    class UserErrorJson(override val httpResponseCode: HttpStatusCode, val json: JsonElement): KorneaResponseResult() {
+    class UserErrorJson(override val httpResponseCode: HttpStatusCode, val json: JsonElement) : KorneaResponseResult() {
         override val contentType: ContentType = ContentType.Application.Json
 
         override suspend fun writeTo(call: ApplicationCall) =
@@ -163,7 +166,8 @@ suspend fun HttpClient.eventually(
     type: Int?,
     day: Int?,
     phase: Int?,
-    category: Int?
+    category: Int?,
+    player: UUID? = null
 ): KorneaResult<List<UpNutEvent>> {
     val missingAmount = limit - nuts.size
     val remainingList = if (missingAmount > 0) upnut.globalEventsBefore(time, missingAmount, nuts.keys) {
@@ -175,24 +179,34 @@ suspend fun HttpClient.eventually(
             .category(category)
     } else emptyList()
 
+    val feedIDs = (nuts.keys.toList() + remainingList).filterNotNull()
+
     return getAsResult<List<UpNutEvent>>("https://api.sibr.dev/eventually/events") {
-        parameter("ids",
-                  buildString {
-                      nuts.keys.joinTo(this, ",")
-                      if (remainingList.isNotEmpty()) {
-                          if (nuts.isNotEmpty()) append(',')
-                          remainingList.joinTo(this, ",")
-                      }
-                  }
-        )
+        parameter("ids", feedIDs.joinToString(","))
     }.map { list ->
         val map = list.associateBy(UpNutEvent::id)
         val list: MutableList<UpNutEvent> = ArrayList(limit)
 
-        nuts.entries.mapNotNullTo(list) { (feedID, nuts) -> map[feedID]?.copy(nuts = JsonPrimitive(nuts)) }
-        remainingList.mapNotNullTo(list) { uuid -> map[uuid]?.copy(nuts = JsonPrimitive(0)) }
+        val upnuts =
+            player?.let { upnut.isUpnutted(feedIDs, time, it) } ?: emptyMap()
 
-        list
+//        nuts.entries.mapNotNullTo(list) { (feedID, nuts) -> map[feedID]?.copy(nuts = JsonPrimitive(nuts)) }
+//        remainingList.mapNotNullTo(list) { uuid -> map[uuid]?.copy(nuts = JsonPrimitive(0)) }
+
+        feedIDs.mapNotNull { feedID ->
+            val event = map[feedID] ?: return@mapNotNull null
+
+            val metadata: JsonElement =
+                if (upnuts[feedID] == true) {
+                    when (val metadata = event.metadata) {
+                        is JsonObject -> JsonObject(metadata + Pair("upnut", JsonPrimitive(true)))
+                        is JsonNull -> JsonObject(mapOf("upnut" to JsonPrimitive(true)))
+                        else -> event.metadata
+                    }
+                } else event.metadata
+
+            event.copy(nuts = JsonPrimitive(nuts[feedID] ?: 0), metadata = metadata)
+        }
     }
 }
 
@@ -208,12 +222,21 @@ inline fun <T> KorneaResult<T>.getAsStage(): CompletionStage<T> =
 
 suspend inline fun ApplicationCall.redirectInternally(path: String, builder: ParametersBuilder.() -> Unit) =
     redirectInternally("$path?${ParametersBuilder().apply(builder).build().formUrlEncode()}")
+
 suspend fun ApplicationCall.redirectInternally(path: String) {
     val cp = object : RequestConnectionPoint by this.request.local {
         override val uri: String = path
     }
     val req = object : ApplicationRequest by this.request {
         override val local: RequestConnectionPoint = cp
+        override val queryParameters: Parameters = object : Parameters {
+            private val decoder = QueryStringDecoder(uri)
+            override val caseInsensitiveName: Boolean get() = true
+            override fun getAll(name: String) = decoder.parameters()[name]
+            override fun names() = decoder.parameters().keys
+            override fun entries() = decoder.parameters().entries
+            override fun isEmpty() = decoder.parameters().isEmpty()
+        }
     }
     val call = object : ApplicationCall by this {
         override val request: ApplicationRequest = req

@@ -62,6 +62,7 @@ import java.time.Clock
 import java.time.Instant
 import java.util.*
 import java.util.concurrent.TimeUnit
+import kotlin.collections.LinkedHashMap
 import kotlin.time.ExperimentalTime
 
 fun main(args: Array<String>) = io.ktor.server.netty.EngineMain.main(args)
@@ -210,6 +211,8 @@ class WhatsUpNut {
             val phase = parameters["phase"]?.toIntOrNull()
             val category = parameters["category"]?.toIntOrNull()
 
+            val player = parameters["player"]?.uuidOrNull()
+
             val limit = (parameters["limit"]?.toIntOrNull() ?: call.request.header("X-UpNut-Limit")?.toIntOrNull())?.coerceIn(1, 50) ?: 50
 
             val nuts =
@@ -226,9 +229,9 @@ class WhatsUpNut {
                             Pair(feedID, sum.toInt())
                         }
                     }
-                }?.toMap() ?: emptyMap()
+                }?.toMap(LinkedHashMap()) ?: emptyMap()
 
-            http.eventually(nuts, upnut, time, limit, season, tournament, type, day, phase, category)
+            http.eventually(nuts, upnut, time, limit, season, tournament, type, day, phase, category, player)
         }.respond(call)
     }
 
@@ -286,6 +289,8 @@ class WhatsUpNut {
             val phase = parameters["phase"]?.toIntOrNull()
             val category = parameters["category"]?.toIntOrNull()
 
+            val player = parameters["player"]?.uuidOrNull()
+
             val limit = (parameters["limit"]?.toIntOrNull() ?: call.request.header("X-UpNut-Limit")?.toIntOrNull())?.coerceIn(1, 50) ?: 50
 
             val nuts =
@@ -302,9 +307,9 @@ class WhatsUpNut {
                             Pair(feedID, sum.toInt())
                         }
                     }
-                }?.toMap() ?: emptyMap()
+                }?.toMap(LinkedHashMap()) ?: emptyMap()
 
-            http.eventually(nuts, upnut, time, limit, season, tournament, type, day, phase, category)
+            http.eventually(nuts, upnut, time, limit, season, tournament, type, day, phase, category, player)
         }.respond(call)
     }
 

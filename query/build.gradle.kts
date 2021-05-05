@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "dev.brella"
-version = "1.3.1"
+version = "1.3.4"
 
 repositories {
     mavenCentral()
