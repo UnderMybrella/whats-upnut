@@ -17,6 +17,7 @@ import io.ktor.client.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
+import io.ktor.request.*
 import io.ktor.response.*
 import io.ktor.util.*
 import io.ktor.utils.io.*
@@ -204,3 +205,19 @@ inline fun <T> KorneaResult<T>.getOrThrow(): T =
 inline fun <T> KorneaResult<T>.getAsStage(): CompletionStage<T> =
     if (this is KorneaResult.Success<T>) CompletableFuture.completedStage(get())
     else CompletableFuture.failedStage(KorneaResultException(this))
+
+suspend inline fun ApplicationCall.redirectInternally(path: String, builder: ParametersBuilder.() -> Unit) =
+    redirectInternally("$path?${ParametersBuilder().apply(builder).build().formUrlEncode()}")
+suspend fun ApplicationCall.redirectInternally(path: String) {
+    val cp = object : RequestConnectionPoint by this.request.local {
+        override val uri: String = path
+    }
+    val req = object : ApplicationRequest by this.request {
+        override val local: RequestConnectionPoint = cp
+    }
+    val call = object : ApplicationCall by this {
+        override val request: ApplicationRequest = req
+    }
+
+    this.application.execute(call, Unit)
+}

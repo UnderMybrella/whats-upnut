@@ -3,15 +3,7 @@ package dev.brella.blasement.upnut
 import com.github.benmanes.caffeine.cache.Caffeine
 import com.soywiz.klock.DateTime
 import com.soywiz.klock.format
-import dev.brella.blasement.upnut.common.NutDateTimeEvent
-import dev.brella.blasement.upnut.common.NutEpochEvent
-import dev.brella.blasement.upnut.common.NutSqlBuilder
-import dev.brella.blasement.upnut.common.NutsDateTime
-import dev.brella.blasement.upnut.common.NutsEpoch
-import dev.brella.blasement.upnut.common.UpNutClient
-import dev.brella.blasement.upnut.common.UpNutEvent
-import dev.brella.blasement.upnut.common.getJsonObjectOrNull
-import dev.brella.blasement.upnut.common.uuidOrNull
+import dev.brella.blasement.upnut.common.*
 import dev.brella.kornea.blaseball.base.common.BLASEBALL_TIME_PATTERN
 import dev.brella.kornea.errors.common.map
 import dev.brella.ktornea.common.KorneaHttpResult
@@ -344,7 +336,7 @@ class WhatsUpNut {
                     val nuts = upnut.client.sql("SELECT nuts FROM upnuts WHERE feed_id = $1 AND provider = $2 AND source IS NOT DISTINCT FROM $3")
                                    .bind("$1", feedID)
                                    .bind("$2", provider)
-                                   .bind("$3", source)
+                                   .bindNullable("$3", source)
                                    .fetch()
                                    .awaitSingleOrNull()
                                    ?.get("nuts")
@@ -394,8 +386,8 @@ class WhatsUpNut {
 
                     val rowsUpdated = upnut.client.sql("DELETE FROM upnuts WHERE feed_id = $1 AND provider = $2 AND source IS NOT DISTINCT FROM $3")
                         .bind("$1", feedID)
-                        .bind("$2", source)
-                        .bind("$3", source)
+                        .bind("$2", provider)
+                        .bindNullable("$3", source)
                         .fetch()
                         .awaitRowsUpdated()
 
@@ -595,68 +587,56 @@ class WhatsUpNut {
 
                     when (sort) {
                         /** Newest */
-                        0 -> call.respondRedirect(false) {
-                            path("/events")
-                            with(parameters) {
-                                append("before", (time / 1000).toString())
-                                append("limit", limit.toString())
+                        0 -> call.redirectInternally("/events") {
+                            append("before", (time / 1000).toString())
+                            append("limit", limit.toString())
 
-                                append("time", time.toString())
+                            append("time", time.toString())
 
-                                if (player != null) append("player", player.toString())
+                            if (player != null) append("player", player.toString())
 
-                                if (category != null) append("category", category.toString())
-                                if (type != null) append("type", type.toString())
-                                if (start != null) append("offset", start.toString())
+                            if (category != null) append("category", category.toString())
+                            if (type != null) append("type", type.toString())
+                            if (start != null) append("offset", start.toString())
 
-                                append("sortorder", "desc")
-                            }
+                            append("sortorder", "desc")
                         }
                         /** Oldest */
-                        1 -> call.respondRedirect(false) {
-                            path("/events")
-                            with(parameters) {
-                                append("before", (time / 1000).toString())
-                                append("limit", limit.toString())
+                        1 -> call.redirectInternally("/events") {
+                            append("before", (time / 1000).toString())
+                            append("limit", limit.toString())
 
-                                append("time", time.toString())
+                            append("time", time.toString())
 
-                                if (player != null) append("player", player.toString())
+                            if (player != null) append("player", player.toString())
 
-                                if (category != null) append("category", category.toString())
-                                if (type != null) append("type", type.toString())
-                                if (start != null) append("offset", start.toString())
+                            if (category != null) append("category", category.toString())
+                            if (type != null) append("type", type.toString())
+                            if (start != null) append("offset", start.toString())
 
-                                append("sortorder", "asc")
-                            }
+                            append("sortorder", "asc")
                         }
                         /** Top */
-                        2 -> call.respondRedirect(false) {
-                            path("/feed/top/global")
-                            with(parameters) {
-                                append("limit", limit.toString())
-                                append("time", time.toString())
+                        2 -> call.redirectInternally("/feed/top/global") {
+                            append("limit", limit.toString())
+                            append("time", time.toString())
 
-                                if (player != null) append("player", player.toString())
+                            if (player != null) append("player", player.toString())
 
-                                if (category != null) append("category", category.toString())
-                                if (type != null) append("type", type.toString())
-                                if (start != null) append("offset", start.toString())
-                            }
+                            if (category != null) append("category", category.toString())
+                            if (type != null) append("type", type.toString())
+                            if (start != null) append("offset", start.toString())
                         }
                         /** Hot */
-                        else -> call.respondRedirect(false) {
-                            path("/feed/hot/global")
-                            with(parameters) {
-                                append("limit", limit.toString())
-                                append("time", time.toString())
+                        else -> call.redirectInternally("/feed/hot/global") {
+                            append("limit", limit.toString())
+                            append("time", time.toString())
 
-                                if (player != null) append("player", player.toString())
+                            if (player != null) append("player", player.toString())
 
-                                if (category != null) append("category", category.toString())
-                                if (type != null) append("type", type.toString())
-                                if (start != null) append("offset", start.toString())
-                            }
+                            if (category != null) append("category", category.toString())
+                            if (type != null) append("type", type.toString())
+                            if (start != null) append("offset", start.toString())
                         }
                     }
                 }
@@ -678,76 +658,64 @@ class WhatsUpNut {
 
                     when (sort) {
                         /** Newest */
-                        0 -> call.respondRedirect(false) {
-                            path("/events")
-                            with(parameters) {
-                                append("before", (time / 1000).toString())
-                                append("limit", limit.toString())
+                        0 -> call.redirectInternally("/events") {
+                            append("before", (time / 1000).toString())
+                            append("limit", limit.toString())
 
-                                append("time", time.toString())
+                            append("time", time.toString())
 
-                                if (player != null) append("player", player.toString())
+                            if (player != null) append("player", player.toString())
 
-                                if (category != null) append("category", category.toString())
-                                if (type != null) append("type", type.toString())
-                                if (start != null) append("offset", start.toString())
+                            if (category != null) append("category", category.toString())
+                            if (type != null) append("type", type.toString())
+                            if (start != null) append("offset", start.toString())
 
-                                append("teamTags", id)
+                            append("teamTags", id)
 
-                                append("sortorder", "desc")
-                            }
+                            append("sortorder", "desc")
                         }
                         /** Oldest */
-                        1 -> call.respondRedirect(false) {
-                            path("/events")
-                            with(parameters) {
-                                append("before", (time / 1000).toString())
-                                append("limit", limit.toString())
+                        1 -> call.redirectInternally("/events") {
+                            append("before", (time / 1000).toString())
+                            append("limit", limit.toString())
 
-                                append("time", time.toString())
+                            append("time", time.toString())
 
-                                if (player != null) append("player", player.toString())
+                            if (player != null) append("player", player.toString())
 
-                                if (category != null) append("category", category.toString())
-                                if (type != null) append("type", type.toString())
-                                if (start != null) append("offset", start.toString())
+                            if (category != null) append("category", category.toString())
+                            if (type != null) append("type", type.toString())
+                            if (start != null) append("offset", start.toString())
 
-                                append("teamTags", id)
+                            append("teamTags", id)
 
-                                append("sortorder", "asc")
-                            }
+                            append("sortorder", "asc")
                         }
                         /** Top */
-                        2 -> call.respondRedirect(false) {
-                            path("/feed/top/team")
-                            with(parameters) {
-                                append("limit", limit.toString())
-                                append("time", time.toString())
+                        2 -> call.redirectInternally("/feed/top/team") {
+                            append("limit", limit.toString())
+                            append("time", time.toString())
 
-                                if (player != null) append("player", player.toString())
+                            if (player != null) append("player", player.toString())
 
-                                if (category != null) append("category", category.toString())
-                                if (type != null) append("type", type.toString())
-                                if (start != null) append("offset", start.toString())
+                            if (category != null) append("category", category.toString())
+                            if (type != null) append("type", type.toString())
+                            if (start != null) append("offset", start.toString())
 
-                                append("id", id)
-                            }
+                            append("id", id)
                         }
                         /** Hot */
-                        else -> call.respondRedirect(false) {
-                            path("/feed/hot/team")
-                            with(parameters) {
-                                append("limit", limit.toString())
-                                append("time", time.toString())
+                        else -> call.redirectInternally("/feed/hot/team") {
+                            append("limit", limit.toString())
+                            append("time", time.toString())
 
-                                if (player != null) append("player", player.toString())
+                            if (player != null) append("player", player.toString())
 
-                                if (category != null) append("category", category.toString())
-                                if (type != null) append("type", type.toString())
-                                if (start != null) append("offset", start.toString())
+                            if (category != null) append("category", category.toString())
+                            if (type != null) append("type", type.toString())
+                            if (start != null) append("offset", start.toString())
 
-                                append("id", id)
-                            }
+                            append("id", id)
                         }
                     }
                 }
@@ -769,76 +737,64 @@ class WhatsUpNut {
 
                     when (sort) {
                         /** Newest */
-                        0 -> call.respondRedirect(false) {
-                            path("/events")
-                            with(parameters) {
-                                append("before", (time / 1000).toString())
-                                append("limit", limit.toString())
+                        0 -> call.redirectInternally("/events") {
+                            append("before", (time / 1000).toString())
+                            append("limit", limit.toString())
 
-                                append("time", time.toString())
+                            append("time", time.toString())
 
-                                if (player != null) append("player", player.toString())
+                            if (player != null) append("player", player.toString())
 
-                                if (category != null) append("category", category.toString())
-                                if (type != null) append("type", type.toString())
-                                if (start != null) append("offset", start.toString())
+                            if (category != null) append("category", category.toString())
+                            if (type != null) append("type", type.toString())
+                            if (start != null) append("offset", start.toString())
 
-                                append("playerTags", id)
+                            append("playerTags", id)
 
-                                append("sortorder", "desc")
-                            }
+                            append("sortorder", "desc")
                         }
                         /** Oldest */
-                        1 -> call.respondRedirect(false) {
-                            path("/events")
-                            with(parameters) {
-                                append("before", (time / 1000).toString())
-                                append("limit", limit.toString())
+                        1 -> call.redirectInternally("/events") {
+                            append("before", (time / 1000).toString())
+                            append("limit", limit.toString())
 
-                                append("time", time.toString())
+                            append("time", time.toString())
 
-                                if (player != null) append("player", player.toString())
+                            if (player != null) append("player", player.toString())
 
-                                if (category != null) append("category", category.toString())
-                                if (type != null) append("type", type.toString())
-                                if (start != null) append("offset", start.toString())
+                            if (category != null) append("category", category.toString())
+                            if (type != null) append("type", type.toString())
+                            if (start != null) append("offset", start.toString())
 
-                                append("playerTags", id)
+                            append("playerTags", id)
 
-                                append("sortorder", "asc")
-                            }
+                            append("sortorder", "asc")
                         }
                         /** Top */
-                        2 -> call.respondRedirect(false) {
-                            path("/feed/top/player")
-                            with(parameters) {
-                                append("limit", limit.toString())
-                                append("time", time.toString())
+                        2 -> call.redirectInternally("/feed/top/player") {
+                            append("limit", limit.toString())
+                            append("time", time.toString())
 
-                                if (player != null) append("player", player.toString())
+                            if (player != null) append("player", player.toString())
 
-                                if (category != null) append("category", category.toString())
-                                if (type != null) append("type", type.toString())
-                                if (start != null) append("offset", start.toString())
+                            if (category != null) append("category", category.toString())
+                            if (type != null) append("type", type.toString())
+                            if (start != null) append("offset", start.toString())
 
-                                append("id", id)
-                            }
+                            append("id", id)
                         }
                         /** Hot */
-                        else -> call.respondRedirect(false) {
-                            path("/feed/hot/player")
-                            with(parameters) {
-                                append("limit", limit.toString())
-                                append("time", time.toString())
+                        else -> call.redirectInternally("/feed/hot/player") {
+                            append("limit", limit.toString())
+                            append("time", time.toString())
 
-                                if (player != null) append("player", player.toString())
+                            if (player != null) append("player", player.toString())
 
-                                if (category != null) append("category", category.toString())
-                                if (type != null) append("type", type.toString())
-                                if (start != null) append("offset", start.toString())
+                            if (category != null) append("category", category.toString())
+                            if (type != null) append("type", type.toString())
+                            if (start != null) append("offset", start.toString())
 
-                                append("id", id)
-                            }
+                            append("id", id)
                         }
                     }
                 }
@@ -860,76 +816,64 @@ class WhatsUpNut {
 
                     when (sort) {
                         /** Newest */
-                        0 -> call.respondRedirect(false) {
-                            path("/events")
-                            with(parameters) {
-                                append("before", (time / 1000).toString())
-                                append("limit", limit.toString())
+                        0 -> call.redirectInternally("/events") {
+                            append("before", (time / 1000).toString())
+                            append("limit", limit.toString())
 
-                                append("time", time.toString())
+                            append("time", time.toString())
 
-                                if (player != null) append("player", player.toString())
+                            if (player != null) append("player", player.toString())
 
-                                if (category != null) append("category", category.toString())
-                                if (type != null) append("type", type.toString())
-                                if (start != null) append("offset", start.toString())
+                            if (category != null) append("category", category.toString())
+                            if (type != null) append("type", type.toString())
+                            if (start != null) append("offset", start.toString())
 
-                                append("gameTags", id)
+                            append("gameTags", id)
 
-                                append("sortorder", "desc")
-                            }
+                            append("sortorder", "desc")
                         }
                         /** Oldest */
-                        1 -> call.respondRedirect(false) {
-                            path("/events")
-                            with(parameters) {
-                                append("before", (time / 1000).toString())
-                                append("limit", limit.toString())
+                        1 -> call.redirectInternally("/events") {
+                            append("before", (time / 1000).toString())
+                            append("limit", limit.toString())
 
-                                append("time", time.toString())
+                            append("time", time.toString())
 
-                                if (player != null) append("player", player.toString())
+                            if (player != null) append("player", player.toString())
 
-                                if (category != null) append("category", category.toString())
-                                if (type != null) append("type", type.toString())
-                                if (start != null) append("offset", start.toString())
+                            if (category != null) append("category", category.toString())
+                            if (type != null) append("type", type.toString())
+                            if (start != null) append("offset", start.toString())
 
-                                append("gameTags", id)
+                            append("gameTags", id)
 
-                                append("sortorder", "asc")
-                            }
+                            append("sortorder", "asc")
                         }
                         /** Top */
-                        2 -> call.respondRedirect(false) {
-                            path("/feed/top/game")
-                            with(parameters) {
-                                append("limit", limit.toString())
-                                append("time", time.toString())
+                        2 -> call.redirectInternally("/feed/top/game") {
+                            append("limit", limit.toString())
+                            append("time", time.toString())
 
-                                if (player != null) append("player", player.toString())
+                            if (player != null) append("player", player.toString())
 
-                                if (category != null) append("category", category.toString())
-                                if (type != null) append("type", type.toString())
-                                if (start != null) append("offset", start.toString())
+                            if (category != null) append("category", category.toString())
+                            if (type != null) append("type", type.toString())
+                            if (start != null) append("offset", start.toString())
 
-                                append("id", id)
-                            }
+                            append("id", id)
                         }
                         /** Hot */
-                        else -> call.respondRedirect(false) {
-                            path("/feed/hot/game")
-                            with(parameters) {
-                                append("limit", limit.toString())
-                                append("time", time.toString())
+                        else -> call.redirectInternally("/feed/hot/game") {
+                            append("limit", limit.toString())
+                            append("time", time.toString())
 
-                                if (player != null) append("player", player.toString())
+                            if (player != null) append("player", player.toString())
 
-                                if (category != null) append("category", category.toString())
-                                if (type != null) append("type", type.toString())
-                                if (start != null) append("offset", start.toString())
+                            if (category != null) append("category", category.toString())
+                            if (type != null) append("type", type.toString())
+                            if (start != null) append("offset", start.toString())
 
-                                append("id", id)
-                            }
+                            append("id", id)
                         }
                     }
                 }
