@@ -5,6 +5,7 @@ import dev.brella.kornea.blaseball.base.common.json.BlaseballDateTimeSerialiser
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.nullable
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encoding.Decoder
@@ -95,13 +96,13 @@ object UUIDSerialiser : KSerializer<UUID> {
 }
 
 object UUIDListSerialiser : KSerializer<List<UUID>> {
-    val base = ListSerializer(String.serializer())
+    val base = ListSerializer(String.serializer()).nullable
 
 
     override val descriptor: SerialDescriptor = base.descriptor
 
     override fun deserialize(decoder: Decoder): List<UUID> =
-        base.deserialize(decoder).mapNotNull(String::uuidOrNull)
+        base.deserialize(decoder)?.mapNotNull(String::uuidOrNull) ?: emptyList()
 
     override fun serialize(encoder: Encoder, value: List<UUID>) =
         base.serialize(encoder, value.map(UUID::toString))

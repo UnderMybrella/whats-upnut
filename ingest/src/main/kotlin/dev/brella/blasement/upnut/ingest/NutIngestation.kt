@@ -81,6 +81,9 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
         nuts.client.sql("CREATE TABLE IF NOT EXISTS snow_crystals (snow_id BIGINT NOT NULL PRIMARY KEY, uuid UUID NOT NULL);")
             .await()
 
+        nuts.client.sql("CREATE TABLE IF NOT EXISTS library (id UUID NOT NULL PRIMARY KEY, book_title VARCHAR(128) NOT NULL, chapter_title VARCHAR(128) NOT NULL, redacted BOOLEAN NOT NULL DEFAULT TRUE);")
+            .await()
+
         nuts.client.sql("CREATE INDEX IF NOT EXISTS snow_index_uuid ON snow_crystals (uuid);")
             .await()
     }
@@ -120,6 +123,17 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
     suspend fun getTeamFeed(teamID: String, category: Int? = null, limit: Int = 100, type: Int? = null, sort: Int? = null, start: String? = null): KorneaResult<List<UpNutEvent>> =
         http.getAsResult("https://blaseball.com/database/feed/team") {
             parameter("id", teamID)
+
+            if (category != null) parameter("category", category)
+            if (type != null) parameter("type", type)
+            if (limit != BlaseballDatabaseService.YES_BRELLA_I_WOULD_LIKE_UNLIMITED_EVENTS) parameter("limit", limit)
+            if (sort != null) parameter("sort", sort)
+            if (start != null) parameter("start", start)
+        }
+
+    suspend fun getStoryFeed(chapterID: String, category: Int? = null, limit: Int = 100, type: Int? = null, sort: Int? = null, start: String? = null): KorneaResult<List<UpNutEvent>> =
+        http.getAsResult("https://blaseball.com/database/feed/story") {
+            parameter("id", chapterID)
 
             if (category != null) parameter("category", category)
             if (type != null) parameter("type", type)
@@ -270,6 +284,57 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                 }
             }
             ?.joinAll()
+    }
+
+    @OptIn(ExperimentalTime::class)
+    val storyByOldestJob = launch {
+        val logger = LoggerFactory.getLogger("dev.brella.blasement.upnut.ingest.StoryByOldest")
+
+        val limit = getIntInScope("story_top", "limit", 100)
+        val loopEvery = getIntInScope("story_top", "loop_duration_s", 60)
+        val delay = getLongInScope("story_top", "delay_ms", 100)
+        val delayOnFailure = getLongInScope("story_top", "delay_on_failure_ms", 100)
+        val totalLimit = getLongInScope("story_top", "total_limit", Long.MAX_VALUE)
+
+        loopEvery(loopEvery.seconds, `while` = { isActive }) {
+//            getFeed(limit = limit, start = lastID?.let(BLASEBALL_TIME_PATTERN::format))
+            var start = 0
+            val now = now()
+
+            val storyList = nuts.client.sql("SELECT id, redacted FROM library").map { row ->
+                (row["id"] as? UUID)?.let { uuid ->
+                    if (row["redacted"] as? Boolean != false) return@map null
+                    else uuid
+                }
+            }.all().collectList().awaitFirstOrNull()?.filterNotNull() ?: emptyList()
+
+            logger.debug("Logging chapters: {}", storyList)
+
+            storyList.map { chapterID ->
+                launch {
+                    while (isActive && start < totalLimit) {
+                        val list = getStoryFeed(chapterID = chapterID.toString(), limit = limit, sort = 0, start = start.toString())
+                                       .doOnThrown { error ->
+                                           logger.debug(
+                                               "Exception occurred when retrieving Story Feed (By Oldest, ID {0}, start = {1}, limit = {2})",
+                                               chapterID,
+                                               start,
+                                               limit,
+                                               error.exception
+                                           )
+                                       }.doOnFailure { delay(delayOnFailure) }
+                                       .getOrNull()?.takeWhile { event -> event.nuts.intOrNull ?: 0 > 0 } ?: break
+
+                        list.forEach { event -> processNuts(now, event) }
+
+                        if (list.size < limit) break
+                        start += list.size
+
+                        delay(delay)
+                    }
+                }
+            }.joinAll()
+        }
     }
 
     val processNuts: suspend (time: Long, event: UpNutEvent) -> Unit = run {

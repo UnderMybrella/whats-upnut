@@ -577,23 +577,29 @@ class WhatsUpNut {
                 }
 
                 get("/global") {
-                    val category = call.parameters["category"]?.toIntOrNull()
-                    val limit = call.parameters["limit"]?.toIntOrNull() ?: 100
-                    val type = call.parameters["type"]?.toIntOrNull()
-                    val sort = call.parameters["sort"]?.toIntOrNull()
-                    val start = call.parameters["start"]?.toIntOrNull()
-                    val time = call.parameters["time"]?.let { time ->
+                    val parameters = call.request.queryParameters
+                    val category = parameters["category"]?.toIntOrNull()
+                    val limit = parameters["limit"]?.toIntOrNull() ?: 100
+                    val type = parameters["type"]?.toIntOrNull()
+                    val sort = parameters["sort"]?.toIntOrNull()
+                    val start = parameters["start"]?.toIntOrNull()
+
+                    val after = parameters["after"]?.let { time ->
+                        time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
+                    }
+                    val time = parameters["time"]?.let { time ->
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
                     } ?: call.request.header("X-UpNut-Time")?.let { time ->
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
                     } ?: Instant.now(Clock.systemUTC()).toEpochMilli()
 
-                    val player = (call.parameters["player"] ?: call.request.header("X-UpNut-Player"))?.uuidOrNull()
+                    val player = (parameters["player"] ?: call.request.header("X-UpNut-Player"))?.uuidOrNull()
 
                     when (sort) {
                         /** Newest */
                         0 -> call.redirectInternally("/events") {
                             append("before", (time / 1000).toString())
+                            after?.let { append("after", (it / 1000).toString()) }
                             append("limit", limit.toString())
 
                             append("time", time.toString())
@@ -609,6 +615,7 @@ class WhatsUpNut {
                         /** Oldest */
                         1 -> call.redirectInternally("/events") {
                             append("before", (time / 1000).toString())
+                            after?.let { append("after", (it / 1000).toString()) }
                             append("limit", limit.toString())
 
                             append("time", time.toString())
@@ -647,24 +654,31 @@ class WhatsUpNut {
                 }
 
                 get("/team") {
-                    val id = call.parameters["id"] ?: return@get call.respondJsonObject(HttpStatusCode.BadRequest) { put("error", "No ID provided") }
-                    val category = call.parameters["category"]?.toIntOrNull()
-                    val limit = call.parameters["limit"]?.toIntOrNull() ?: 100
-                    val type = call.parameters["type"]?.toIntOrNull()
-                    val sort = call.parameters["sort"]?.toIntOrNull()
-                    val start = call.parameters["start"]?.toIntOrNull()
-                    val time = call.parameters["time"]?.let { time ->
+                    val parameters = call.request.queryParameters
+                    
+                    val id = parameters["id"] ?: return@get call.respondJsonObject(HttpStatusCode.BadRequest) { put("error", "No ID provided") }
+                    val category = parameters["category"]?.toIntOrNull()
+                    val limit = parameters["limit"]?.toIntOrNull() ?: 100
+                    val type = parameters["type"]?.toIntOrNull()
+                    val sort = parameters["sort"]?.toIntOrNull()
+                    val start = parameters["start"]?.toIntOrNull()
+
+                    val after = parameters["after"]?.let { time ->
+                        time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
+                    }
+                    val time = parameters["time"]?.let { time ->
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
                     } ?: call.request.header("X-UpNut-Time")?.let { time ->
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
                     } ?: Instant.now(Clock.systemUTC()).toEpochMilli()
 
-                    val player = (call.parameters["player"] ?: call.request.header("X-UpNut-Player"))?.uuidOrNull()
+                    val player = (parameters["player"] ?: call.request.header("X-UpNut-Player"))?.uuidOrNull()
 
                     when (sort) {
                         /** Newest */
                         0 -> call.redirectInternally("/events") {
                             append("before", (time / 1000).toString())
+                            after?.let { append("after", (it / 1000).toString()) }
                             append("limit", limit.toString())
 
                             append("time", time.toString())
@@ -682,6 +696,7 @@ class WhatsUpNut {
                         /** Oldest */
                         1 -> call.redirectInternally("/events") {
                             append("before", (time / 1000).toString())
+                            after?.let { append("after", (it / 1000).toString()) }
                             append("limit", limit.toString())
 
                             append("time", time.toString())
@@ -726,24 +741,30 @@ class WhatsUpNut {
                 }
 
                 get("/player") {
-                    val id = call.parameters["id"] ?: return@get call.respondJsonObject(HttpStatusCode.BadRequest) { put("error", "No ID provided") }
-                    val category = call.parameters["category"]?.toIntOrNull()
-                    val limit = call.parameters["limit"]?.toIntOrNull() ?: 100
-                    val type = call.parameters["type"]?.toIntOrNull()
-                    val sort = call.parameters["sort"]?.toIntOrNull()
-                    val start = call.parameters["start"]?.toIntOrNull()
-                    val time = call.parameters["time"]?.let { time ->
+                    val parameters = call.request.queryParameters
+                    
+                    val id = parameters["id"] ?: return@get call.respondJsonObject(HttpStatusCode.BadRequest) { put("error", "No ID provided") }
+                    val category = parameters["category"]?.toIntOrNull()
+                    val limit = parameters["limit"]?.toIntOrNull() ?: 100
+                    val type = parameters["type"]?.toIntOrNull()
+                    val sort = parameters["sort"]?.toIntOrNull()
+                    val start = parameters["start"]?.toIntOrNull()
+                    val after = parameters["after"]?.let { time ->
+                        time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
+                    }
+                    val time = parameters["time"]?.let { time ->
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
                     } ?: call.request.header("X-UpNut-Time")?.let { time ->
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
                     } ?: Instant.now(Clock.systemUTC()).toEpochMilli()
 
-                    val player = (call.parameters["player"] ?: call.request.header("X-UpNut-Player"))?.uuidOrNull()
+                    val player = (parameters["player"] ?: call.request.header("X-UpNut-Player"))?.uuidOrNull()
 
                     when (sort) {
                         /** Newest */
                         0 -> call.redirectInternally("/events") {
                             append("before", (time / 1000).toString())
+                            after?.let { append("after", (it / 1000).toString()) }
                             append("limit", limit.toString())
 
                             append("time", time.toString())
@@ -761,6 +782,7 @@ class WhatsUpNut {
                         /** Oldest */
                         1 -> call.redirectInternally("/events") {
                             append("before", (time / 1000).toString())
+                            after?.let { append("after", (it / 1000).toString()) }
                             append("limit", limit.toString())
 
                             append("time", time.toString())
@@ -805,24 +827,29 @@ class WhatsUpNut {
                 }
 
                 get("/game") {
-                    val id = call.parameters["id"] ?: return@get call.respondJsonObject(HttpStatusCode.BadRequest) { put("error", "No ID provided") }
-                    val category = call.parameters["category"]?.toIntOrNull()
-                    val limit = call.parameters["limit"]?.toIntOrNull() ?: 100
-                    val type = call.parameters["type"]?.toIntOrNull()
-                    val sort = call.parameters["sort"]?.toIntOrNull()
-                    val start = call.parameters["start"]?.toIntOrNull()
-                    val time = call.parameters["time"]?.let { time ->
+                    val parameters = call.request.queryParameters
+                    val id = parameters["id"] ?: return@get call.respondJsonObject(HttpStatusCode.BadRequest) { put("error", "No ID provided") }
+                    val category = parameters["category"]?.toIntOrNull()
+                    val limit = parameters["limit"]?.toIntOrNull() ?: 100
+                    val type = parameters["type"]?.toIntOrNull()
+                    val sort = parameters["sort"]?.toIntOrNull()
+                    val start = parameters["start"]?.toIntOrNull()
+                    val after = parameters["after"]?.let { time ->
+                        time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
+                    }
+                    val time = parameters["time"]?.let { time ->
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
                     } ?: call.request.header("X-UpNut-Time")?.let { time ->
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
                     } ?: Instant.now(Clock.systemUTC()).toEpochMilli()
 
-                    val player = (call.parameters["player"] ?: call.request.header("X-UpNut-Player"))?.uuidOrNull()
+                    val player = (parameters["player"] ?: call.request.header("X-UpNut-Player"))?.uuidOrNull()
 
                     when (sort) {
                         /** Newest */
                         0 -> call.redirectInternally("/events") {
                             append("before", (time / 1000).toString())
+                            after?.let { append("after", (it / 1000).toString()) }
                             append("limit", limit.toString())
 
                             append("time", time.toString())
@@ -840,6 +867,7 @@ class WhatsUpNut {
                         /** Oldest */
                         1 -> call.redirectInternally("/events") {
                             append("before", (time / 1000).toString())
+                            after?.let { append("after", (it / 1000).toString()) }
                             append("limit", limit.toString())
 
                             append("time", time.toString())
