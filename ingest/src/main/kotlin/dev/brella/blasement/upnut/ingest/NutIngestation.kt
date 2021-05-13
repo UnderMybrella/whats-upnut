@@ -11,17 +11,20 @@ import dev.brella.kornea.blaseball.BlaseballApi
 import dev.brella.kornea.blaseball.endpoints.BlaseballDatabaseService
 import dev.brella.kornea.errors.common.KorneaResult
 import dev.brella.kornea.errors.common.doOnFailure
+import dev.brella.kornea.errors.common.doOnSuccess
 import dev.brella.kornea.errors.common.doOnThrown
 import dev.brella.kornea.errors.common.getOrNull
 import dev.brella.ktornea.common.getAsResult
 import dev.brella.ktornea.common.installGranularHttp
 import io.ktor.client.*
+import io.ktor.client.call.*
 import io.ktor.client.engine.okhttp.*
 import io.ktor.client.features.*
 import io.ktor.client.features.compression.*
 import io.ktor.client.features.json.*
 import io.ktor.client.features.json.serializer.*
 import io.ktor.client.request.*
+import io.ktor.client.statement.*
 import io.ktor.http.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -81,7 +84,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
         nuts.client.sql("CREATE TABLE IF NOT EXISTS snow_crystals (snow_id BIGINT NOT NULL PRIMARY KEY, uuid UUID NOT NULL);")
             .await()
 
-        nuts.client.sql("CREATE TABLE IF NOT EXISTS library (id UUID NOT NULL PRIMARY KEY, book_title VARCHAR(128) NOT NULL, chapter_title VARCHAR(128) NOT NULL, redacted BOOLEAN NOT NULL DEFAULT TRUE);")
+        nuts.client.sql("CREATE TABLE IF NOT EXISTS library (id UUID NOT NULL PRIMARY KEY, chapter_title_redacted VARCHAR(128), book_title VARCHAR(128) NOT NULL, chapter_title VARCHAR(128) NOT NULL, redacted BOOLEAN NOT NULL DEFAULT TRUE);")
             .await()
 
         nuts.client.sql("CREATE INDEX IF NOT EXISTS snow_index_uuid ON snow_crystals (uuid);")
@@ -334,6 +337,99 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                     }
                 }
             }.joinAll()
+        }
+    }
+
+    val STORY_LIST_REGEX =
+        "books\\s*:\\s*\\[\\s*(?:\\s*\\{\\s*title\\s*:\\s*\"[^\"]+\"\\s*,\\s*chapters\\s*:\\s*\\[(?:\\s*\\{\\s*title\\s*:\\s*\"[^\"]+\"\\s*,\\s*id\\s*:\\s*\"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\"\\s*(?:,\\s*redacted\\s*:\\s*(?:true|false)\\s*)?\\}\\s*,?)*\\s*\\]\\s*,?\\s*\\}\\s*,?\\s*)*".toRegex()
+    val BOOK_REGEX =
+        "\\{\\s*title\\s*:\\s*\"([^\"]+)\"\\s*,\\s*chapters\\s*:\\s*\\[((?:\\s*\\{\\s*title\\s*:\\s*\"[^\"]+\"\\s*,\\s*id\\s*:\\s*\"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\"\\s*(?:,\\s*redacted\\s*:\\s*(?:true|false)\\s*)?\\}\\s*,?)*)\\s*]".toRegex()
+    val CHAPTER_REGEX = "\\{\\s*title\\s*:\\s*\"([^\"]+)\"\\s*,\\s*id\\s*:\\s*\"([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\"\\s*(?:,\\s*redacted\\s*:\\s*(true|false)\\s*)?\\}".toRegex()
+
+    @OptIn(ExperimentalTime::class)
+    val librarian = launch {
+        val logger = LoggerFactory.getLogger("dev.brella.blasement.upnut.ingest.Librarian")
+
+        val loopEvery = getIntInScope("librarian", "loop_duration_s", 60)
+        val delay = getLongInScope("librarian", "delay_ms", 100)
+        val delayOnFailure = getLongInScope("librarian", "delay_on_failure_ms", 100)
+        val totalLimit = getLongInScope("librarian", "total_limit", Long.MAX_VALUE)
+
+        var etag: String? = null
+
+        loopEvery(loopEvery.seconds, `while` = { isActive }) {
+            http.getAsResult<HttpResponse>("https://raw.githubusercontent.com/xSke/blaseball-site-files/main/main.js")
+                .doOnSuccess { response ->
+                    val mainEtag = response.etag()
+
+                    if (etag == null || etag != mainEtag) {
+                        etag = mainEtag
+
+                        logger.debug("Testing new books...")
+
+                        val document = STORY_LIST_REGEX.find(response.receive<String>())
+                                       ?: return@loopEvery logger.debug("No story list in document")
+
+                        val books = BOOK_REGEX.findAll(document.value).associate { result ->
+                            val name = result.groupValues[1]
+
+                            val chapters = CHAPTER_REGEX.findAll(result.groupValues[2])
+                                .associate { chapterResult -> UUID.fromString(chapterResult.groupValues[2]) to Pair(chapterResult.groupValues[1], chapterResult.groupValues.getOrNull(3)?.toBoolean() ?: false) }
+
+                            name to chapters
+                        }
+
+                        val booksReturned = nuts.client.sql("SELECT id, chapter_title, redacted FROM library").map { row ->
+                            (row["id"] as? UUID)?.let { uuid ->
+                                Pair(uuid, Pair(row["chapter_title"] as? String ?: row["chapter_title"].toString(), row["redacted"]))
+                            }
+                        }.all()
+                                             .collectList()
+                                             .awaitFirstOrNull()
+                                             ?.filterNotNull()
+                                             ?.toMap()
+                                            ?: emptyMap()
+
+                        val newBooks: MutableList<Triple<String, String, UUID>> = ArrayList()
+
+                        books.forEach { (bookName, chapters) ->
+                            chapters.forEach { (chapterUUID, chapterDetails) ->
+                                val existing = booksReturned[chapterUUID]
+                                if (existing == null) {
+                                    //New book just dropped
+
+                                    logger.info("New book just dropped: {} / {}", bookName, chapterDetails.first)
+
+                                    nuts.client.sql("INSERT INTO library (id, book_title, chapter_title, redacted) VALUES ($1, $2, $3, $4)")
+                                        .bind("$1", chapterUUID)
+                                        .bind("$2", bookName)
+                                        .bind("$3", chapterDetails.first)
+                                        .bind("$4", chapterDetails.second)
+                                        .await()
+
+                                    if (!chapterDetails.second)
+                                        newBooks.add(Triple(bookName, chapterDetails.first, chapterUUID))
+
+                                } else if (chapterDetails.second != existing.second) {
+                                    //Book is now unredacted! -- Right ?
+
+                                    logger.info("Book has shifted redactivity: {} -> {}, {} -> {}", existing.first, chapterDetails.first, existing.second, chapterDetails.second)
+
+                                    nuts.client.sql("UPDATE library SET chapter_title = $1, chapter_title_redacted = $2, redacted = $3")
+                                        .bind("$1", chapterDetails.first)
+                                        .bind("$2", existing.first)
+                                        .bind("$3", chapterDetails.second)
+                                        .await()
+
+                                    if (!chapterDetails.second)
+                                        newBooks.add(Triple(bookName, chapterDetails.first, chapterUUID))
+                                }
+                            }
+                        }
+
+                        logger.info("Books unredacted: {}", newBooks)
+                    }
+                }
         }
     }
 
