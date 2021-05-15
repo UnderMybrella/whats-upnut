@@ -11,6 +11,7 @@ import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import java.util.*
 
@@ -28,7 +29,8 @@ data class UpNutEvent(
     val phase: Int,
     val category: Int,
     val description: String,
-    var nuts: JsonPrimitive,
+    var nuts: JsonPrimitive = JsonNull,
+    var scales: JsonPrimitive = JsonNull,
     val metadata: JsonElement
 )
 
@@ -71,21 +73,23 @@ data class NutDateTimeEvent(
 @Serializable
 data class NutsEpoch(
     val nuts: Int,
+    val scales: Int,
     val provider: @Serializable(UUIDSerialiser::class) UUID,
     val source: @Serializable(UUIDSerialiser::class) UUID?,
     val time: Long
 ) {
-    constructor(nuts: Number, provider: UUID, source: UUID?, time: Number) : this(nuts.toInt(), provider, source, time.toLong())
+    constructor(nuts: Number, scales: Number, provider: UUID, source: UUID?, time: Number) : this(nuts.toInt(), scales.toInt(), provider, source, time.toLong())
 }
 
 @Serializable
 data class NutsDateTime(
     val nuts: Int,
+    val scales: Int,
     val provider: @Serializable(UUIDSerialiser::class) UUID,
     val source: @Serializable(UUIDSerialiser::class) UUID?,
     val time: String
 ) {
-    constructor(nuts: Number, provider: UUID, source: UUID?, time: String) : this(nuts.toInt(), provider, source, time)
+    constructor(nuts: Number, scales: Number, provider: UUID, source: UUID?, time: String) : this(nuts.toInt(), scales.toInt(), provider, source, time)
 }
 
 object UUIDSerialiser : KSerializer<UUID> {

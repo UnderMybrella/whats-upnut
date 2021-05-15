@@ -113,19 +113,19 @@ class UpNutClient(config: JsonObject) {
         val PLAYER_EVENT_IDS = getEventIDs(CREATED_TIME_FILTER, PLAYER_FILTER, METADATA_NO_CREATED_FILTER)
 
         val EVENTUALLY_EVENTS =
-            NutSqlStatement("SELECT feed_id, SUM(nuts) as nuts FROM upnuts WHERE $IN_FEED_ID_FILTER AND $TIME_FILTER AND $NONE_OF_PROVIDERS_FILTER AND $NONE_OF_SOURCES_FILTER AND $ONE_OF_PROVIDERS_FILTER AND $ONE_OF_SOURCES_FILTER GROUP BY feed_id")
+            NutSqlStatement("SELECT feed_id, SUM(nuts) as nuts, SUM(scales) as scales FROM upnuts WHERE $IN_FEED_ID_FILTER AND $TIME_FILTER AND $NONE_OF_PROVIDERS_FILTER AND $NONE_OF_SOURCES_FILTER AND $ONE_OF_PROVIDERS_FILTER AND $ONE_OF_SOURCES_FILTER GROUP BY feed_id")
 
         val EVENTUALLY_EVENTS_NUTS_LIST =
-            NutSqlStatement("SELECT feed_id, nuts, provider, source, time FROM upnuts WHERE $IN_FEED_ID_FILTER AND $TIME_FILTER AND $NONE_OF_PROVIDERS_FILTER AND $NONE_OF_SOURCES_FILTER AND $ONE_OF_PROVIDERS_FILTER AND $ONE_OF_SOURCES_FILTER")
+            NutSqlStatement("SELECT feed_id, nuts, scales, provider, source, time FROM upnuts WHERE $IN_FEED_ID_FILTER AND $TIME_FILTER AND $NONE_OF_PROVIDERS_FILTER AND $NONE_OF_SOURCES_FILTER AND $ONE_OF_PROVIDERS_FILTER AND $ONE_OF_SOURCES_FILTER")
 
 
         val EVENTUALLY_EVENTS_WITH_SOURCES =
-            NutSqlStatement("SELECT feed_id, SUM(nuts) as nuts FROM upnuts WHERE $IN_FEED_ID_FILTER AND $TIME_FILTER AND $ONE_OF_SOURCES_FILTER GROUP BY feed_id")
+            NutSqlStatement("SELECT feed_id, SUM(nuts) as nuts, SUM(scales) as scales FROM upnuts WHERE $IN_FEED_ID_FILTER AND $TIME_FILTER AND $ONE_OF_SOURCES_FILTER GROUP BY feed_id")
         val EVENTUALLY_EVENTS_WITHOUT_SOURCES =
-            NutSqlStatement("SELECT feed_id, SUM(nuts) as nuts FROM upnuts WHERE $IN_FEED_ID_FILTER AND $TIME_FILTER AND $NONE_OF_SOURCES_FILTER GROUP BY feed_id")
+            NutSqlStatement("SELECT feed_id, SUM(nuts) as nuts, SUM(scales) as scales FROM upnuts WHERE $IN_FEED_ID_FILTER AND $TIME_FILTER AND $NONE_OF_SOURCES_FILTER GROUP BY feed_id")
 
         val IS_UPNUT_FOR_SOURCE =
-            NutSqlStatement("SELECT feed_id, SUM(nuts) as nuts FROM upnuts WHERE $IN_FEED_ID_FILTER AND $TIME_FILTER AND $SINGLE_SOURCE_FILTER GROUP BY feed_id")
+            NutSqlStatement("SELECT feed_id, SUM(nuts) as nuts, SUM(scales) as scales FROM upnuts WHERE $IN_FEED_ID_FILTER AND $TIME_FILTER AND $SINGLE_SOURCE_FILTER GROUP BY feed_id")
 
         //        @Language("PostgreSQL")
         inline fun getEventIDs(vararg where: String) =
@@ -134,12 +134,12 @@ class UpNutClient(config: JsonObject) {
         //        @Language("PostgreSQL")
         inline fun hotPSQL(vararg where: String) =
             NutSqlStatement(
-                "SELECT list.feed_id, list.sum, list.time FROM (SELECT feed_id, SUM(nuts) AS sum, MAX(time) as time FROM upnuts ${
+                "SELECT list.feed_id, list.nuts, list.scales, list.time FROM (SELECT feed_id, SUM(nuts) AS nuts, SUM(scales) as scales, MAX(time) as time FROM upnuts ${
                     if (where.isEmpty()) "" else where.joinToString(
                         prefix = "WHERE ",
                         separator = " AND "
                     )
-                } GROUP BY feed_id ORDER BY time DESC, sum DESC LIMIT $LIMIT_VAR) as list ORDER BY list.sum DESC, list.time DESC"
+                } GROUP BY feed_id ORDER BY time DESC, sum DESC LIMIT $LIMIT_VAR) as list ORDER BY list.nuts DESC, list.scales DESC, list.time DESC"
             )
 
         inline fun hotPSQLWithTime(vararg and: String) =
@@ -156,12 +156,12 @@ class UpNutClient(config: JsonObject) {
 
         inline fun topPSQL(vararg where: String) =
             NutSqlStatement(
-                "SELECT feed_id, SUM(nuts) AS sum FROM upnuts ${
+                "SELECT feed_id, SUM(nuts) AS nuts, SUM(scales) as scales FROM upnuts ${
                     if (where.isEmpty()) "" else where.joinToString(
                         prefix = "WHERE ",
                         separator = " AND "
                     )
-                } GROUP BY feed_id ORDER BY sum DESC LIMIT $LIMIT_VAR"
+                } GROUP BY feed_id ORDER BY nuts DESC LIMIT $LIMIT_VAR"
             )
 
         inline fun topPSQLWithTime(vararg and: String) =
@@ -240,7 +240,9 @@ class UpNutClient(config: JsonObject) {
             .map { row ->
                 (row["feed_id"] as? UUID)?.let { feedID ->
                     (row["nuts"] as? Number)?.toInt()?.let { nuts ->
-                        Pair(feedID, nuts)
+                        (row["scales"] as? Number)?.toInt()?.let { scales ->
+                            Pair(feedID, Pair(nuts, scales))
+                        }
                     }
                 }
             }.all()
@@ -267,8 +269,10 @@ class UpNutClient(config: JsonObject) {
                 (row["feed_id"] as? UUID)?.let { feedID ->
                     (row["provider"] as? UUID)?.let { provider ->
                         (row["nuts"] as? Number)?.toInt()?.let { nuts ->
-                            (row["time"] as? Number)?.toLong()?.let { time ->
-                                feedID to NutsEpoch(nuts, provider, row["source"] as? UUID, time)
+                            (row["scales"] as? Number)?.toInt()?.let { scales ->
+                                (row["time"] as? Number)?.toLong()?.let { time ->
+                                    feedID to NutsEpoch(nuts, scales, provider, row["source"] as? UUID, time)
+                                }
                             }
                         }
                     }
@@ -287,7 +291,9 @@ class UpNutClient(config: JsonObject) {
             .map { row ->
                 (row["feed_id"] as? UUID)?.let { feedID ->
                     (row["nuts"] as? Number)?.toInt()?.let { nuts ->
-                        Pair(feedID, nuts)
+                        (row["scales"] as? Number)?.toInt()?.let { scales ->
+                            Pair(feedID, Pair(nuts, scales))
+                        }
                     }
                 }
             }.all()
@@ -304,7 +310,9 @@ class UpNutClient(config: JsonObject) {
             .map { row ->
                 (row["feed_id"] as? UUID)?.let { feedID ->
                     (row["nuts"] as? Number)?.toInt()?.let { nuts ->
-                        Pair(feedID, nuts)
+                        (row["scales"] as? Number)?.toInt()?.let { scales ->
+                            Pair(feedID, Pair(nuts, scales))
+                        }
                     }
                 }
             }.all()
@@ -321,7 +329,9 @@ class UpNutClient(config: JsonObject) {
             .map { row ->
                 (row["feed_id"] as? UUID)?.let { feedID ->
                     (row["nuts"] as? Number)?.toInt()?.let { nuts ->
-                        Pair(feedID, nuts > 0)
+                        (row["scales"] as? Number)?.toInt()?.let { scales ->
+                            Pair(feedID, Pair(nuts > 0, scales > 0))
+                        }
                     }
                 }
             }.all()

@@ -38,7 +38,9 @@ import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.future.await
 import kotlinx.coroutines.future.future
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.reactive.awaitFirstOrNull
 import kotlinx.coroutines.reactive.awaitSingleOrNull
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -313,8 +315,29 @@ class WhatsUpNut {
         }.respond(call)
     }
 
+    @Serializable
+    data class LibraryBook(val bookTitle: String?, val chapters: List<LibraryChapter>)
+    @Serializable
+    data class LibraryChapter(val feedID: String, val chapterTitle: String, val chapterTitleRedacted: String?, val isRedacted: Boolean)
+
     fun routing(routing: Routing) =
         with(routing) {
+            get("/library") {
+                val books = upnut.client.sql("SELECT id, chapter_title_redacted, chapter_title, book_title, redacted FROM library").map { row ->
+                    (row["id"] as? UUID)?.let { uuid ->
+                        Pair(row["book_title"] as? String, LibraryChapter(uuid.toString(), row["chapter_title"] as? String ?: row["chapter_title"].toString(), row["chapter_title_redacted"] as? String, row["redacted"] as? Boolean ?: true))
+                    }
+                }.all()
+                    .collectList()
+                    .awaitFirstOrNull()
+                    ?.filterNotNull()
+                    ?.groupBy(Pair<String?, LibraryChapter>::first, Pair<String?, LibraryChapter>::second)
+                    ?.map { (name, chapters) -> LibraryBook(name, chapters) }
+                ?: emptyList()
+
+                call.respond(books)
+            }
+
             put("/{feed_id}/{provider}") {
                 val authToken = call.request.header("Authorization")
 
@@ -452,8 +475,10 @@ class WhatsUpNut {
                             player?.let { upnut.isUpnutted(feedEventSources, time, it) } ?: emptyMap()
 
                         list.map inner@{ event ->
+                            val upnutted = upnuts[event.id]
                             val metadata: JsonElement =
-                                if (upnuts[event.id] == true) {
+                                if (upnutted?.first == true || upnutted?.second == true) {
+                                    //TODO: Triple check that it is, in fact, upnut for scales
                                     when (val metadata = event.metadata) {
                                         is JsonObject -> JsonObject(metadata + Pair("upnut", JsonPrimitive(true)))
                                         is JsonNull -> JsonObject(mapOf("upnut" to JsonPrimitive(true)))
@@ -461,9 +486,11 @@ class WhatsUpNut {
                                     }
                                 } else event.metadata
 
-                            map[event.id]?.let {
-                                if (it != event.nuts.intOrNull)
-                                    return@inner event.copy(nuts = JsonPrimitive(it), metadata = metadata)
+                            map[event.id]?.let { (nuts, scales) ->
+                                if (nuts != event.nuts.intOrNull)
+                                    return@inner event.copy(nuts = JsonPrimitive(nuts), metadata = metadata)
+                                else if (scales != event.scales.intOrNull)
+                                    return@inner event.copy(scales = JsonPrimitive(scales), metadata = metadata)
                             }
 
                             return@inner event.copy(metadata = metadata)
@@ -529,7 +556,7 @@ class WhatsUpNut {
                                     event.phase,
                                     event.category,
                                     event.description,
-                                    nuts?.map { (nuts, provider, source, time) -> NutsDateTime(nuts, provider, source, BLASEBALL_TIME_PATTERN.format(DateTime.fromUnix(time))) } ?: emptyList(),
+                                    nuts?.map { (nuts, scales, provider, source, time) -> NutsDateTime(nuts, scales, provider, source, BLASEBALL_TIME_PATTERN.format(DateTime.fromUnix(time))) } ?: emptyList(),
                                     event.metadata
                                 )
                             } else {

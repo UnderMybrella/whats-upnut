@@ -1,5 +1,6 @@
 package dev.brella.blasement.upnut.common
 
+import io.r2dbc.spi.Row
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.*
 import kotlin.time.Duration
@@ -55,3 +56,10 @@ public inline fun JsonObject.getLongOrNull(key: String) =
 
 public inline fun JsonObject.getBooleanOrNull(key: String) =
     (get(key) as? JsonPrimitive)?.booleanOrNull
+
+public inline fun <reified T> Row.get(name: String): T? =
+    get(name, T::class.java)
+
+public inline fun <reified T> Row.getValue(name: String): T =
+    get(name, T::class.java)
+

@@ -1,12 +1,8 @@
 package dev.brella.blasement.upnut.ingest
 
-import dev.brella.blasement.upnut.common.UpNutClient
-import dev.brella.blasement.upnut.common.UpNutEvent
-import dev.brella.blasement.upnut.common.getBooleanOrNull
-import dev.brella.blasement.upnut.common.getIntOrNull
-import dev.brella.blasement.upnut.common.getJsonObjectOrNull
-import dev.brella.blasement.upnut.common.getLongOrNull
-import dev.brella.blasement.upnut.common.loopEvery
+import com.soywiz.klock.DateTime
+import com.soywiz.klock.DateTimeTz
+import dev.brella.blasement.upnut.common.*
 import dev.brella.kornea.blaseball.BlaseballApi
 import dev.brella.kornea.blaseball.endpoints.BlaseballDatabaseService
 import dev.brella.kornea.errors.common.KorneaResult
@@ -16,6 +12,7 @@ import dev.brella.kornea.errors.common.doOnThrown
 import dev.brella.kornea.errors.common.getOrNull
 import dev.brella.ktornea.common.getAsResult
 import dev.brella.ktornea.common.installGranularHttp
+import dev.brella.ktornea.common.postAsResult
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.engine.okhttp.*
@@ -25,33 +22,40 @@ import io.ktor.client.features.json.*
 import io.ktor.client.features.json.serializer.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
+import io.ktor.content.*
 import io.ktor.http.*
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.joinAll
-import kotlinx.coroutines.launch
+import io.ktor.util.*
+import io.r2dbc.spi.Row
+import kotlinx.coroutines.*
 import kotlinx.coroutines.reactive.awaitFirstOrNull
-import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.intOrNull
+import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.r2dbc.core.await
 import java.io.File
+import java.nio.ByteBuffer
 import java.time.Clock
 import java.time.Instant
 import java.util.*
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 import kotlin.coroutines.CoroutineContext
 import kotlin.time.ExperimentalTime
 import kotlin.time.seconds
 
+import org.springframework.r2dbc.core.bind as bindNullable
+import io.r2dbc.postgresql.codec.Json as R2Json
+
 class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineScope {
     companion object {
         val THE_GAME_BAND = UUID.fromString("7fcb63bc-11f2-40b9-b465-f1d458692a63")
+
+        const val NUTS_THRESHOLD = 1_000
+        const val SCALES_THRESHOLD = 1_000
 
         @JvmStatic
         fun main(args: Array<String>) {
@@ -66,7 +70,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
     override val coroutineContext: CoroutineContext = SupervisorJob() + Dispatchers.IO
 
     val initJob = launch {
-        nuts.client.sql("CREATE TABLE IF NOT EXISTS upnuts (id BIGSERIAL PRIMARY KEY, nuts INT NOT NULL DEFAULT 1, feed_id uuid NOT NULL, source uuid, provider uuid NOT NULL, time BIGINT NOT NULL)")
+        nuts.client.sql("CREATE TABLE IF NOT EXISTS upnuts (id BIGSERIAL PRIMARY KEY, nuts INT, scales INT, feed_id uuid NOT NULL, source uuid, provider uuid NOT NULL, time BIGINT NOT NULL)")
             .await()
 
         nuts.client.sql("CREATE TABLE IF NOT EXISTS game_nuts (id BIGSERIAL PRIMARY KEY, feed_id uuid NOT NULL, game_id uuid NOT NULL);")
@@ -85,6 +89,12 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
             .await()
 
         nuts.client.sql("CREATE TABLE IF NOT EXISTS library (id UUID NOT NULL PRIMARY KEY, chapter_title_redacted VARCHAR(128), book_title VARCHAR(128) NOT NULL, chapter_title VARCHAR(128) NOT NULL, redacted BOOLEAN NOT NULL DEFAULT TRUE);")
+            .await()
+
+        nuts.client.sql("CREATE TABLE IF NOT EXISTS webhooks (id BIGSERIAL PRIMARY KEY, url VARCHAR(256) NOT NULL, subscribed_to BIGINT NOT NULL, secret_key bytea NOT NULL)")
+            .await()
+
+        nuts.client.sql("CREATE TABLE IF NOT EXISTS events (id BIGSERIAL PRIMARY KEY, send_to VARCHAR(256) NOT NULL, data json NOT NULL, created BIGINT NOT NULL, sent_at BIGINT)")
             .await()
 
         nuts.client.sql("CREATE INDEX IF NOT EXISTS snow_index_uuid ON snow_crystals (uuid);")
@@ -167,6 +177,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
         ?: defaultScope?.getLongOrNull(key)
         ?: default
 
+    inline fun nowInstant() = Instant.now(Clock.systemUTC())
     inline fun now() = Instant.now(Clock.systemUTC()).toEpochMilli()
 
     @OptIn(ExperimentalTime::class)
@@ -189,7 +200,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                .doOnThrown { error ->
                                    logger.debug("Exception occurred when retrieving Global Feed (By Top, start = {0}, limit = {1})", start, limit, error.exception)
                                }.doOnFailure { delay(delayOnFailure) }
-                               .getOrNull()?.takeWhile { event -> event.nuts.intOrNull ?: 0 > 0 } ?: break
+                               .getOrNull()?.takeWhile { event -> event.nuts.intOrNull ?: 0 > 0 || event.scales.intOrNull ?: 0 > 0 } ?: break
 
                 list.forEach { event -> processNuts(now, event) }
 
@@ -215,7 +226,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
             val list = getGlobalFeed(limit = limit, sort = 3)
                 .doOnThrown { error -> logger.debug("Exception occurred when retrieving Global Feed (By Hot, limit = {0})", limit, error.exception) }
                 .doOnFailure { delay(delayOnFailure) }
-                .getOrNull()?.takeWhile { event -> event.nuts.intOrNull ?: 0 > 0 }
+                .getOrNull()?.takeWhile { event -> event.nuts.intOrNull ?: 0 > 0 || event.scales.intOrNull ?: 0 > 0 }
                 ?.reversed()
 
             list?.forEach { event -> processNuts(now, event) }
@@ -245,7 +256,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                            .doOnThrown { error ->
                                                logger.debug("Exception occurred when retrieving Team Feed (By Top, start = {0}, limit = {1}, team = {2})", start, limit, team.fullName, error.exception)
                                            }.doOnFailure { delay(delayOnFailure) }
-                                           .getOrNull()?.takeWhile { event -> event.nuts.intOrNull ?: 0 > 0 } ?: break
+                                           .getOrNull()?.takeWhile { event -> event.nuts.intOrNull ?: 0 > 0 || event.scales.intOrNull ?: 0 > 0 } ?: break
 
                             list.forEach { event -> processNuts(now, event) }
 
@@ -279,7 +290,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                         val list = getTeamFeed(team.id.id, limit = limit, sort = 3)
                             .doOnThrown { error -> logger.debug("Exception occurred when retrieving Team Feed (By Hot, limit = {0}, team = {1})", limit, team.fullName, error.exception) }
                             .doOnFailure { delay(delayOnFailure) }
-                            .getOrNull()?.takeWhile { event -> event.nuts.intOrNull ?: 0 > 0 }
+                            .getOrNull()?.takeWhile { event -> event.nuts.intOrNull ?: 0 > 0 || event.scales.intOrNull ?: 0 > 0 }
                             ?.reversed()
 
                         list?.forEach { event -> processNuts(now, event) }
@@ -326,7 +337,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                                error.exception
                                            )
                                        }.doOnFailure { delay(delayOnFailure) }
-                                       .getOrNull()?.takeWhile { event -> event.nuts.intOrNull ?: 0 > 0 } ?: break
+                                       .getOrNull() ?: break
 
                         list.forEach { event -> processNuts(now, event) }
 
@@ -358,6 +369,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
         var etag: String? = null
 
         loopEvery(loopEvery.seconds, `while` = { isActive }) {
+            val retrievalTime = now()
             http.getAsResult<HttpResponse>("https://raw.githubusercontent.com/xSke/blaseball-site-files/main/main.js")
                 .doOnSuccess { response ->
                     val mainEtag = response.etag()
@@ -384,13 +396,15 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 Pair(uuid, Pair(row["chapter_title"] as? String ?: row["chapter_title"].toString(), row["redacted"]))
                             }
                         }.all()
-                                             .collectList()
-                                             .awaitFirstOrNull()
-                                             ?.filterNotNull()
-                                             ?.toMap()
+                                                .collectList()
+                                                .awaitFirstOrNull()
+                                                ?.filterNotNull()
+                                                ?.toMap()
                                             ?: emptyMap()
 
-                        val newBooks: MutableList<Triple<String, String, UUID>> = ArrayList()
+                        val chaptersAdded: MutableList<WebhookEvent.LibraryChapter> = ArrayList()
+                        val chaptersUnlocked: MutableList<WebhookEvent.LibraryChapter> = ArrayList()
+                        val chaptersLocked: MutableList<WebhookEvent.LibraryChapter> = ArrayList()
 
                         books.forEach { (bookName, chapters) ->
                             chapters.forEach { (chapterUUID, chapterDetails) ->
@@ -407,8 +421,10 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                         .bind("$4", chapterDetails.second)
                                         .await()
 
-                                    if (!chapterDetails.second)
-                                        newBooks.add(Triple(bookName, chapterDetails.first, chapterUUID))
+                                    val chapter = WebhookEvent.LibraryChapter(bookName, chapterUUID, chapterDetails.first, null, chapterDetails.second)
+                                    chaptersAdded.add(chapter)
+                                    if (chapter.isRedacted) chaptersLocked.add(chapter)
+                                    else chaptersUnlocked.add(chapter)
 
                                 } else if (chapterDetails.second != existing.second) {
                                     //Book is now unredacted! -- Right ?
@@ -421,1930 +437,604 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                         .bind("$3", chapterDetails.second)
                                         .await()
 
-                                    if (!chapterDetails.second)
-                                        newBooks.add(Triple(bookName, chapterDetails.first, chapterUUID))
+                                    val chapter = WebhookEvent.LibraryChapter(bookName, chapterUUID, chapterDetails.first, existing.first, chapterDetails.second)
+                                    if (chapter.isRedacted) chaptersLocked.add(chapter)
+                                    else chaptersUnlocked.add(chapter)
                                 }
                             }
                         }
 
-                        logger.info("Books unredacted: {}", newBooks)
+                        if (chaptersAdded.isNotEmpty())
+                            postEvent(WebhookEvent.NewLibraryChapters(chaptersAdded), WebhookEvent.NEW_LIBRARY_CHAPTERS)
+                        if (chaptersLocked.isNotEmpty())
+                            postEvent(WebhookEvent.LibraryChaptersRedacted(chaptersLocked), WebhookEvent.LIBRARY_CHAPTERS_REDACTED)
+                        if (chaptersUnlocked.isNotEmpty())
+                            postEvent(WebhookEvent.LibraryChaptersUnredacted(chaptersUnlocked), WebhookEvent.LIBRARY_CHAPTERS_UNREDACTED)
                     }
                 }
         }
     }
 
-    val processNuts: suspend (time: Long, event: UpNutEvent) -> Unit = run {
-        val config = config.getJsonObjectOrNull("process")
+    suspend fun postEvent(event: WebhookEvent, eventType: Int) {
+        val now = now()
 
-        val loggingEnabled = config?.getBooleanOrNull("logging_enabled") ?: true
-        val playerTags = config?.getBooleanOrNull("player_tags") ?: true
-        val gameTags = config?.getBooleanOrNull("game_tags") ?: true
-        val teamTags = config?.getBooleanOrNull("team_tags") ?: true
-        val eventMetadata = config?.getBooleanOrNull("event_metadata") ?: true
+        val eventData = Json.encodeToString(event).encodeToByteArray()
+        val eventAsJson = R2Json.of(eventData)
 
-        val logger = LoggerFactory.getLogger("dev.brella.blasement.upnut.ingest.Process")
+        val statement = nuts.client.sql("INSERT INTO events ( send_to, data, created, sent_at ) VALUES ( $1, $2, $3, $4 )")
+            .bind("$2", eventAsJson)
+            .bind("$3", now)
 
-        if (loggingEnabled) {
-            if (playerTags) {
-                if (gameTags) {
-                    if (teamTags) {
-                        if (eventMetadata) {
-                            return@run nuts@{ time, event ->
-                                val players = nuts.client.sql("SELECT player_id FROM player_nuts WHERE feed_id = $1")
-                                                  .bind("$1", event.id)
-                                                  .fetch()
-                                                  .all()
-                                                  .mapNotNull { it["player_id"] as? UUID }
-                                                  .collectList()
-                                                  .awaitFirstOrNull() ?: emptyList()
+        coroutineScope {
+            webhooksFor(eventType)
+                .map { (url, token) ->
+                    async { url to (postEventTo(url, token, eventData) is KorneaResult.Success<*>) }
+                }.awaitAll().forEach { (url, successful) ->
+                    try {
+                        statement.bind("$1", url)
+                            .bindNullable("$4", if (successful) now else null)
+                            .await()
+                    } catch (th: Throwable) {
+                        th.printStackTrace()
+                    }
+                }
+        }
+    }
 
-                                event.playerTags?.filterNot(players::contains)
-                                    ?.forEach { playerID ->
-                                        nuts.client.sql("INSERT INTO player_nuts (feed_id, player_id) VALUES ($1, $2)")
+    suspend inline fun postEventTo(url: String, token: ByteArray, eventData: ByteArray): KorneaResult<Unit> {
+        val sig = Mac.getInstance("HmacSHA256")
+            .apply { init(SecretKeySpec(token, "HmacSHA256")) }
+            .doFinal(eventData)
+            .let(::hex)
+
+        return http.postAsResult<Unit>(url) {
+            header("X-UpNut-Signature", sig)
+
+            body = ByteArrayContent(eventData, contentType = ContentType.Application.Json)
+        }
+    }
+
+    suspend fun webhooksFor(eventType: Int): List<Pair<String, ByteArray>> =
+        nuts.client.sql("SELECT url, secret_key FROM webhooks WHERE subscribed_to & $1 = $1")
+            .bind("$1", eventType)
+            .map { row ->
+                Pair(
+                    row["url"] as String, when (val secretKey = row["secret_key"]) {
+                        is ByteBuffer -> ByteArray(secretKey.remaining()).also(secretKey::get)
+                        is ByteArray -> secretKey
+                        else -> return@map null
+                    }
+                )
+            }
+            .all()
+            .collectList()
+            .awaitFirstOrNull()
+            ?.filterNotNull() ?: emptyList()
+
+    inner class NutBuilder {
+        suspend inline fun players(time: Long, event: UpNutEvent) {
+            val players = nuts.client.sql("SELECT player_id FROM player_nuts WHERE feed_id = $1")
+                              .bind("$1", event.id)
+                              .fetch()
+                              .all()
+                              .mapNotNull { it["player_id"] as? UUID }
+                              .collectList()
+                              .awaitFirstOrNull() ?: emptyList()
+
+            event.playerTags?.filterNot(players::contains)
+                ?.forEach { playerID ->
+                    nuts.client.sql("INSERT INTO player_nuts (feed_id, player_id) VALUES ($1, $2)")
+                        .bind("$1", event.id)
+                        .bind("$2", playerID)
+                        .await()
+                }
+        }
+
+        suspend inline fun games(time: Long, event: UpNutEvent) {
+            val games = nuts.client.sql("SELECT game_id FROM game_nuts WHERE feed_id = $1")
+                            .bind("$1", event.id)
+                            .fetch()
+                            .all()
+                            .mapNotNull { it["game_id"] as? UUID }
+                            .collectList()
+                            .awaitFirstOrNull() ?: emptyList()
+
+            event.gameTags?.filterNot(games::contains)
+                ?.forEach { gameID ->
+                    nuts.client.sql("INSERT INTO game_nuts (feed_id, game_id) VALUES ($1, $2)")
+                        .bind("$1", event.id)
+                        .bind("$2", gameID)
+                        .await()
+                }
+        }
+
+        suspend inline fun teams(time: Long, event: UpNutEvent) {
+            val teams = nuts.client.sql("SELECT team_id FROM team_nuts WHERE feed_id = $1")
+                            .bind("$1", event.id)
+                            .fetch()
+                            .all()
+                            .mapNotNull { it["team_id"] as? UUID }
+                            .collectList()
+                            .awaitFirstOrNull() ?: emptyList()
+
+            event.teamTags?.filterNot(teams::contains)
+                ?.forEach { teamID ->
+                    nuts.client.sql("INSERT INTO team_nuts (feed_id, team_id) VALUES ($1, $2)")
+                        .bind("$1", event.id)
+                        .bind("$2", teamID)
+                        .await()
+                }
+        }
+
+        suspend inline fun metadata(time: Long, event: UpNutEvent) {
+            nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
+                .bind("$1", event.id)
+                .bind("$2", event.created.utc.unixMillisLong)
+                .bind("$3", event.season)
+                .bind("$4", event.tournament)
+                .bind("$5", event.type)
+                .bind("$6", event.day)
+                .bind("$7", event.phase)
+                .bind("$8", event.category)
+                .await()
+        }
+
+        inline operator fun Int?.minus(other: Int?): Int? =
+            if (this != null && other != null) this - other else null
+
+        suspend inline fun insert(time: Long, event: UpNutEvent): Pair<Int, Int>? {
+            val atTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS nuts, SUM(scales) as scales FROM upnuts WHERE feed_id = $1 AND time <= $2 AND provider = '7fcb63bc-11f2-40b9-b465-f1d458692a63'::uuid AND source IS NULL")
                                             .bind("$1", event.id)
-                                            .bind("$2", playerID)
-                                            .await()
-                                    }
+                                            .bind("$2", time)
+                                            .map { row -> (row.get<Int>("nuts") ?: 0) to (row.get<Int>("scales") ?: 0) }
+                                            .first()
+                                            .awaitFirstOrNull()
 
-                                val games = nuts.client.sql("SELECT game_id FROM game_nuts WHERE feed_id = $1")
-                                                .bind("$1", event.id)
-                                                .fetch()
-                                                .all()
-                                                .mapNotNull { it["game_id"] as? UUID }
-                                                .collectList()
-                                                .awaitFirstOrNull() ?: emptyList()
+            val nutsDifference = event.nuts.intOrNull - atTimeOfRecording?.first
+            if (nutsDifference != null && nutsDifference > 0) {
+                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
+                    .bind("$1", nutsDifference)
+                    .bind("$2", event.id)
+                    .bind("$3", THE_GAME_BAND)
+                    .bind("$4", time)
+                    .await()
 
-                                event.gameTags?.filterNot(games::contains)
-                                    ?.forEach { gameID ->
-                                        nuts.client.sql("INSERT INTO game_nuts (feed_id, game_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", gameID)
-                                            .await()
-                                    }
+                val missing = atTimeOfRecording!!.first - NUTS_THRESHOLD
 
-                                val teams = nuts.client.sql("SELECT team_id FROM team_nuts WHERE feed_id = $1")
-                                                .bind("$1", event.id)
-                                                .fetch()
-                                                .all()
-                                                .mapNotNull { it["team_id"] as? UUID }
-                                                .collectList()
-                                                .awaitFirstOrNull() ?: emptyList()
+                if (missing <= 0 && nutsDifference > missing) postEvent(WebhookEvent.ThresholdPassedNuts(NUTS_THRESHOLD, time, event), WebhookEvent.THRESHOLD_PASSED_NUTS)
+            }
 
-                                event.teamTags?.filterNot(teams::contains)
-                                    ?.forEach { teamID ->
-                                        nuts.client.sql("INSERT INTO team_nuts (feed_id, team_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", teamID)
-                                            .await()
-                                    }
+            val scalesDifference = event.scales.intOrNull - atTimeOfRecording?.second
+            if (scalesDifference != null && scalesDifference > 0) {
+                nuts.client.sql("INSERT INTO upnuts (scales, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
+                    .bind("$1", scalesDifference)
+                    .bind("$2", event.id)
+                    .bind("$3", THE_GAME_BAND)
+                    .bind("$4", time)
+                    .await()
 
-//                                if (nuts.client.sql("SELECT feed_id FROM event_metadata WHERE feed_id = $1")
-//                                        .bind("$1", event.id)
-//                                        .fetch()
-//                                        .awaitOneOrNull()
-//                                    == null
-//                                ) {
-//                                    nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 )")
-//                                        .bind("$1", event.id)
-//                                        .bind("$2", event.created.utc.unixMillisLong)
-//                                        .bind("$3", event.season)
-//                                        .bind("$4", event.tournament)
-//                                        .bind("$5", event.type)
-//                                        .bind("$6", event.day)
-//                                        .bind("$7", event.phase)
-//                                        .bind("$8", event.category)
-//                                        .await()
-//                                }
+                //We don't know the threshold for scales (or even how they work); making an educated guess
+                val missing = atTimeOfRecording!!.second - SCALES_THRESHOLD
 
-                                nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
-                                    .bind("$1", event.id)
-                                    .bind("$2", event.created.utc.unixMillisLong)
-                                    .bind("$3", event.season)
-                                    .bind("$4", event.tournament)
-                                    .bind("$5", event.type)
-                                    .bind("$6", event.day)
-                                    .bind("$7", event.phase)
-                                    .bind("$8", event.category)
-                                    .await()
+                if (missing <= 0 && scalesDifference > missing) postEvent(WebhookEvent.ThresholdPassedScales(SCALES_THRESHOLD, time, event), WebhookEvent.THRESHOLD_PASSED_SCALES)
+            }
 
-                                val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                                                .bind("$1", event.id)
-                                                                .bind("$2", time)
-                                                                .fetch()
-                                                                .first()
-                                                                .awaitFirstOrNull()
-                                                                ?.values
-                                                                ?.let { it.firstOrNull() as? Number }
-                                                                ?.toInt() ?: 0
+            return atTimeOfRecording
+        }
 
-                                val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
-                                if (difference <= 0) return@nuts
+        suspend inline fun logging(time: Long, event: UpNutEvent, logger: Logger, atTimeOfRecording: Pair<Int, Int>?) {
+            if (atTimeOfRecording == null) return
+            if (atTimeOfRecording.first > 0) logger.info("{} +{} nuts", event.id, atTimeOfRecording.first)
+            if (atTimeOfRecording.second > 0) logger.info("{} +{} scales", event.id, atTimeOfRecording.second)
+        }
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                    .bind("$1", difference)
-                                    .bind("$2", event.id)
-                                    .bind("$3", THE_GAME_BAND)
-                                    .bind("$4", time)
-                                    .await()
+        inline fun build(): suspend (time: Long, event: UpNutEvent) -> Unit = run {
+            val config = config.getJsonObjectOrNull("process")
 
-                                logger.info("${event.id} +$difference")
+            val loggingEnabled = config?.getBooleanOrNull("logging_enabled") ?: true
+            val playerTags = config?.getBooleanOrNull("player_tags") ?: true
+            val gameTags = config?.getBooleanOrNull("game_tags") ?: true
+            val teamTags = config?.getBooleanOrNull("team_tags") ?: true
+            val eventMetadata = config?.getBooleanOrNull("event_metadata") ?: true
+
+            val logger = LoggerFactory.getLogger("dev.brella.blasement.upnut.ingest.Process")
+
+            if (loggingEnabled) {
+                if (playerTags) {
+                    if (gameTags) {
+                        if (teamTags) {
+                            if (eventMetadata) {
+                                return@run nuts@{ time, event ->
+                                    players(time, event)
+                                    games(time, event)
+                                    teams(time, event)
+                                    metadata(time, event)
+
+                                    logging(time, event, logger, insert(time, event))
+                                }
+                            } else {
+                                return@run nuts@{ time, event ->
+                                    players(time, event)
+                                    games(time, event)
+                                    teams(time, event)
+//                                    metadata(time, event)
+
+                                    logging(time, event, logger, insert(time, event))
+                                }
                             }
                         } else {
-                            return@run nuts@{ time, event ->
-                                val players = nuts.client.sql("SELECT player_id FROM player_nuts WHERE feed_id = $1")
-                                                  .bind("$1", event.id)
-                                                  .fetch()
-                                                  .all()
-                                                  .mapNotNull { it["player_id"] as? UUID }
-                                                  .collectList()
-                                                  .awaitFirstOrNull() ?: emptyList()
+                            if (eventMetadata) {
+                                return@run nuts@{ time, event ->
+                                    players(time, event)
+                                    games(time, event)
+//                                    teams(time, event)
+                                    metadata(time, event)
 
-                                event.playerTags?.filterNot(players::contains)
-                                    ?.forEach { playerID ->
-                                        nuts.client.sql("INSERT INTO player_nuts (feed_id, player_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", playerID)
-                                            .await()
-                                    }
+                                    logging(time, event, logger, insert(time, event))
+                                }
+                            } else {
+                                return@run nuts@{ time, event ->
+                                    players(time, event)
+                                    games(time, event)
+//                                    teams(time, event)
+//                                    metadata(time, event)
 
-                                val games = nuts.client.sql("SELECT game_id FROM game_nuts WHERE feed_id = $1")
-                                                .bind("$1", event.id)
-                                                .fetch()
-                                                .all()
-                                                .mapNotNull { it["game_id"] as? UUID }
-                                                .collectList()
-                                                .awaitFirstOrNull() ?: emptyList()
-
-                                event.gameTags?.filterNot(games::contains)
-                                    ?.forEach { gameID ->
-                                        nuts.client.sql("INSERT INTO game_nuts (feed_id, game_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", gameID)
-                                            .await()
-                                    }
-
-                                val teams = nuts.client.sql("SELECT team_id FROM team_nuts WHERE feed_id = $1")
-                                                .bind("$1", event.id)
-                                                .fetch()
-                                                .all()
-                                                .mapNotNull { it["team_id"] as? UUID }
-                                                .collectList()
-                                                .awaitFirstOrNull() ?: emptyList()
-
-                                event.teamTags?.filterNot(teams::contains)
-                                    ?.forEach { teamID ->
-                                        nuts.client.sql("INSERT INTO team_nuts (feed_id, team_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", teamID)
-                                            .await()
-                                    }
-
-                                val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                                                .bind("$1", event.id)
-                                                                .bind("$2", time)
-                                                                .fetch()
-                                                                .first()
-                                                                .awaitFirstOrNull()
-                                                                ?.values
-                                                                ?.let { it.firstOrNull() as? Number }
-                                                                ?.toInt() ?: 0
-
-                                val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
-                                if (difference <= 0) return@nuts
-
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                    .bind("$1", difference)
-                                    .bind("$2", event.id)
-                                    .bind("$3", THE_GAME_BAND)
-                                    .bind("$4", time)
-                                    .await()
-
-                                logger.info("${event.id} +$difference")
+                                    logging(time, event, logger, insert(time, event))
+                                }
                             }
                         }
                     } else {
-                        if (eventMetadata) {
-                            return@run nuts@{ time, event ->
-                                val players = nuts.client.sql("SELECT player_id FROM player_nuts WHERE feed_id = $1")
-                                                  .bind("$1", event.id)
-                                                  .fetch()
-                                                  .all()
-                                                  .mapNotNull { it["player_id"] as? UUID }
-                                                  .collectList()
-                                                  .awaitFirstOrNull() ?: emptyList()
+                        if (teamTags) {
+                            if (eventMetadata) {
+                                return@run nuts@{ time, event ->
+                                    players(time, event)
+//                                    games(time, event)
+                                    teams(time, event)
+                                    metadata(time, event)
 
-                                event.playerTags?.filterNot(players::contains)
-                                    ?.forEach { playerID ->
-                                        nuts.client.sql("INSERT INTO player_nuts (feed_id, player_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", playerID)
-                                            .await()
-                                    }
+                                    logging(time, event, logger, insert(time, event))
+                                }
+                            } else {
+                                return@run nuts@{ time, event ->
+                                    players(time, event)
+//                                    games(time, event)
+                                    teams(time, event)
+//                                    metadata(time, event)
 
-                                val games = nuts.client.sql("SELECT game_id FROM game_nuts WHERE feed_id = $1")
-                                                .bind("$1", event.id)
-                                                .fetch()
-                                                .all()
-                                                .mapNotNull { it["game_id"] as? UUID }
-                                                .collectList()
-                                                .awaitFirstOrNull() ?: emptyList()
-
-                                event.gameTags?.filterNot(games::contains)
-                                    ?.forEach { gameID ->
-                                        nuts.client.sql("INSERT INTO game_nuts (feed_id, game_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", gameID)
-                                            .await()
-                                    }
-
-                                nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
-                                    .bind("$1", event.id)
-                                    .bind("$2", event.created.utc.unixMillisLong)
-                                    .bind("$3", event.season)
-                                    .bind("$4", event.tournament)
-                                    .bind("$5", event.type)
-                                    .bind("$6", event.day)
-                                    .bind("$7", event.phase)
-                                    .bind("$8", event.category)
-                                    .await()
-
-                                val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                                                .bind("$1", event.id)
-                                                                .bind("$2", time)
-                                                                .fetch()
-                                                                .first()
-                                                                .awaitFirstOrNull()
-                                                                ?.values
-                                                                ?.let { it.firstOrNull() as? Number }
-                                                                ?.toInt() ?: 0
-
-                                val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
-                                if (difference <= 0) return@nuts
-
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                    .bind("$1", difference)
-                                    .bind("$2", event.id)
-                                    .bind("$3", THE_GAME_BAND)
-                                    .bind("$4", time)
-                                    .await()
-
-                                logger.info("${event.id} +$difference")
+                                    logging(time, event, logger, insert(time, event))
+                                }
                             }
                         } else {
-                            return@run nuts@{ time, event ->
-                                val players = nuts.client.sql("SELECT player_id FROM player_nuts WHERE feed_id = $1")
-                                                  .bind("$1", event.id)
-                                                  .fetch()
-                                                  .all()
-                                                  .mapNotNull { it["player_id"] as? UUID }
-                                                  .collectList()
-                                                  .awaitFirstOrNull() ?: emptyList()
+                            if (eventMetadata) {
+                                return@run nuts@{ time, event ->
+                                    players(time, event)
+//                                    games(time, event)
+//                                    teams(time, event)
+                                    metadata(time, event)
 
-                                event.playerTags?.filterNot(players::contains)
-                                    ?.forEach { playerID ->
-                                        nuts.client.sql("INSERT INTO player_nuts (feed_id, player_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", playerID)
-                                            .await()
-                                    }
+                                    logging(time, event, logger, insert(time, event))
+                                }
+                            } else {
+                                return@run nuts@{ time, event ->
+                                    players(time, event)
+//                                    games(time, event)
+//                                    teams(time, event)
+//                                    metadata(time, event)
 
-                                val games = nuts.client.sql("SELECT game_id FROM game_nuts WHERE feed_id = $1")
-                                                .bind("$1", event.id)
-                                                .fetch()
-                                                .all()
-                                                .mapNotNull { it["game_id"] as? UUID }
-                                                .collectList()
-                                                .awaitFirstOrNull() ?: emptyList()
-
-                                event.gameTags?.filterNot(games::contains)
-                                    ?.forEach { gameID ->
-                                        nuts.client.sql("INSERT INTO game_nuts (feed_id, game_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", gameID)
-                                            .await()
-                                    }
-
-                                val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                                                .bind("$1", event.id)
-                                                                .bind("$2", time)
-                                                                .fetch()
-                                                                .first()
-                                                                .awaitFirstOrNull()
-                                                                ?.values
-                                                                ?.let { it.firstOrNull() as? Number }
-                                                                ?.toInt() ?: 0
-
-                                val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
-                                if (difference <= 0) return@nuts
-
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                    .bind("$1", difference)
-                                    .bind("$2", event.id)
-                                    .bind("$3", THE_GAME_BAND)
-                                    .bind("$4", time)
-                                    .await()
-
-                                logger.info("${event.id} +$difference")
+                                    logging(time, event, logger, insert(time, event))
+                                }
                             }
                         }
                     }
                 } else {
-                    if (teamTags) {
-                        if (eventMetadata) {
-                            return@run nuts@{ time, event ->
-                                val players = nuts.client.sql("SELECT player_id FROM player_nuts WHERE feed_id = $1")
-                                                  .bind("$1", event.id)
-                                                  .fetch()
-                                                  .all()
-                                                  .mapNotNull { it["player_id"] as? UUID }
-                                                  .collectList()
-                                                  .awaitFirstOrNull() ?: emptyList()
+                    if (gameTags) {
+                        if (teamTags) {
+                            if (eventMetadata) {
+                                return@run nuts@{ time, event ->
+//                                    players(time, event)
+                                    games(time, event)
+                                    teams(time, event)
+                                    metadata(time, event)
 
-                                event.playerTags?.filterNot(players::contains)
-                                    ?.forEach { playerID ->
-                                        nuts.client.sql("INSERT INTO player_nuts (feed_id, player_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", playerID)
-                                            .await()
-                                    }
+                                    logging(time, event, logger, insert(time, event))
+                                }
+                            } else {
+                                return@run nuts@{ time, event ->
+//                                    players(time, event)
+                                    games(time, event)
+                                    teams(time, event)
+//                                    metadata(time, event)
 
-                                val teams = nuts.client.sql("SELECT team_id FROM team_nuts WHERE feed_id = $1")
-                                                .bind("$1", event.id)
-                                                .fetch()
-                                                .all()
-                                                .mapNotNull { it["team_id"] as? UUID }
-                                                .collectList()
-                                                .awaitFirstOrNull() ?: emptyList()
-
-                                event.teamTags?.filterNot(teams::contains)
-                                    ?.forEach { teamID ->
-                                        nuts.client.sql("INSERT INTO team_nuts (feed_id, team_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", teamID)
-                                            .await()
-                                    }
-
-                                nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
-                                    .bind("$1", event.id)
-                                    .bind("$2", event.created.utc.unixMillisLong)
-                                    .bind("$3", event.season)
-                                    .bind("$4", event.tournament)
-                                    .bind("$5", event.type)
-                                    .bind("$6", event.day)
-                                    .bind("$7", event.phase)
-                                    .bind("$8", event.category)
-                                    .await()
-
-                                val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                                                .bind("$1", event.id)
-                                                                .bind("$2", time)
-                                                                .fetch()
-                                                                .first()
-                                                                .awaitFirstOrNull()
-                                                                ?.values
-                                                                ?.let { it.firstOrNull() as? Number }
-                                                                ?.toInt() ?: 0
-
-                                val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
-                                if (difference <= 0) return@nuts
-
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                    .bind("$1", difference)
-                                    .bind("$2", event.id)
-                                    .bind("$3", THE_GAME_BAND)
-                                    .bind("$4", time)
-                                    .await()
-
-                                logger.info("${event.id} +$difference")
+                                    logging(time, event, logger, insert(time, event))
+                                }
                             }
                         } else {
-                            return@run nuts@{ time, event ->
-                                val players = nuts.client.sql("SELECT player_id FROM player_nuts WHERE feed_id = $1")
-                                                  .bind("$1", event.id)
-                                                  .fetch()
-                                                  .all()
-                                                  .mapNotNull { it["player_id"] as? UUID }
-                                                  .collectList()
-                                                  .awaitFirstOrNull() ?: emptyList()
+                            if (eventMetadata) {
+                                return@run nuts@{ time, event ->
+//                                    players(time, event)
+                                    games(time, event)
+//                                    teams(time, event)
+                                    metadata(time, event)
 
-                                event.playerTags?.filterNot(players::contains)
-                                    ?.forEach { playerID ->
-                                        nuts.client.sql("INSERT INTO player_nuts (feed_id, player_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", playerID)
-                                            .await()
-                                    }
+                                    logging(time, event, logger, insert(time, event))
+                                }
+                            } else {
+                                return@run nuts@{ time, event ->
+//                                    players(time, event)
+                                    games(time, event)
+//                                    teams(time, event)
+//                                    metadata(time, event)
 
-                                val teams = nuts.client.sql("SELECT team_id FROM team_nuts WHERE feed_id = $1")
-                                                .bind("$1", event.id)
-                                                .fetch()
-                                                .all()
-                                                .mapNotNull { it["team_id"] as? UUID }
-                                                .collectList()
-                                                .awaitFirstOrNull() ?: emptyList()
-
-                                event.teamTags?.filterNot(teams::contains)
-                                    ?.forEach { teamID ->
-                                        nuts.client.sql("INSERT INTO team_nuts (feed_id, team_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", teamID)
-                                            .await()
-                                    }
-
-                                val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                                                .bind("$1", event.id)
-                                                                .bind("$2", time)
-                                                                .fetch()
-                                                                .first()
-                                                                .awaitFirstOrNull()
-                                                                ?.values
-                                                                ?.let { it.firstOrNull() as? Number }
-                                                                ?.toInt() ?: 0
-
-                                val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
-                                if (difference <= 0) return@nuts
-
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                    .bind("$1", difference)
-                                    .bind("$2", event.id)
-                                    .bind("$3", THE_GAME_BAND)
-                                    .bind("$4", time)
-                                    .await()
-
-                                logger.info("${event.id} +$difference")
+                                    logging(time, event, logger, insert(time, event))
+                                }
                             }
                         }
                     } else {
-                        if (eventMetadata) {
-                            return@run nuts@{ time, event ->
-                                val players = nuts.client.sql("SELECT player_id FROM player_nuts WHERE feed_id = $1")
-                                                  .bind("$1", event.id)
-                                                  .fetch()
-                                                  .all()
-                                                  .mapNotNull { it["player_id"] as? UUID }
-                                                  .collectList()
-                                                  .awaitFirstOrNull() ?: emptyList()
+                        if (teamTags) {
+                            if (eventMetadata) {
+                                return@run nuts@{ time, event ->
+//                                    players(time, event)
+//                                    games(time, event)
+                                    teams(time, event)
+                                    metadata(time, event)
 
-                                event.playerTags?.filterNot(players::contains)
-                                    ?.forEach { playerID ->
-                                        nuts.client.sql("INSERT INTO player_nuts (feed_id, player_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", playerID)
-                                            .await()
-                                    }
+                                    logging(time, event, logger, insert(time, event))
+                                }
+                            } else {
+                                return@run nuts@{ time, event ->
+//                                    players(time, event)
+//                                    games(time, event)
+                                    teams(time, event)
+//                                    metadata(time, event)
 
-                                nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
-                                    .bind("$1", event.id)
-                                    .bind("$2", event.created.utc.unixMillisLong)
-                                    .bind("$3", event.season)
-                                    .bind("$4", event.tournament)
-                                    .bind("$5", event.type)
-                                    .bind("$6", event.day)
-                                    .bind("$7", event.phase)
-                                    .bind("$8", event.category)
-                                    .await()
-
-                                val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                                                .bind("$1", event.id)
-                                                                .bind("$2", time)
-                                                                .fetch()
-                                                                .first()
-                                                                .awaitFirstOrNull()
-                                                                ?.values
-                                                                ?.let { it.firstOrNull() as? Number }
-                                                                ?.toInt() ?: 0
-
-                                val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
-                                if (difference <= 0) return@nuts
-
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                    .bind("$1", difference)
-                                    .bind("$2", event.id)
-                                    .bind("$3", THE_GAME_BAND)
-                                    .bind("$4", time)
-                                    .await()
-
-                                logger.info("${event.id} +$difference")
+                                    logging(time, event, logger, insert(time, event))
+                                }
                             }
                         } else {
-                            return@run nuts@{ time, event ->
-                                val players = nuts.client.sql("SELECT player_id FROM player_nuts WHERE feed_id = $1")
-                                                  .bind("$1", event.id)
-                                                  .fetch()
-                                                  .all()
-                                                  .mapNotNull { it["player_id"] as? UUID }
-                                                  .collectList()
-                                                  .awaitFirstOrNull() ?: emptyList()
+                            if (eventMetadata) {
+                                return@run nuts@{ time, event ->
+//                                    players(time, event)
+//                                    games(time, event)
+//                                    teams(time, event)
+                                    metadata(time, event)
 
-                                event.playerTags?.filterNot(players::contains)
-                                    ?.forEach { playerID ->
-                                        nuts.client.sql("INSERT INTO player_nuts (feed_id, player_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", playerID)
-                                            .await()
-                                    }
+                                    logging(time, event, logger, insert(time, event))
+                                }
+                            } else {
+                                return@run nuts@{ time, event ->
+//                                    players(time, event)
+//                                    games(time, event)
+//                                    teams(time, event)
+//                                    metadata(time, event)
 
-                                val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                                                .bind("$1", event.id)
-                                                                .bind("$2", time)
-                                                                .fetch()
-                                                                .first()
-                                                                .awaitFirstOrNull()
-                                                                ?.values
-                                                                ?.let { it.firstOrNull() as? Number }
-                                                                ?.toInt() ?: 0
-
-                                val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
-                                if (difference <= 0) return@nuts
-
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                    .bind("$1", difference)
-                                    .bind("$2", event.id)
-                                    .bind("$3", THE_GAME_BAND)
-                                    .bind("$4", time)
-                                    .await()
-
-                                logger.info("${event.id} +$difference")
+                                    logging(time, event, logger, insert(time, event))
+                                }
                             }
                         }
                     }
                 }
             } else {
-                if (gameTags) {
-                    if (teamTags) {
-                        if (eventMetadata) {
-                            return@run nuts@{ time, event ->
-                                val players = nuts.client.sql("SELECT player_id FROM player_nuts WHERE feed_id = $1")
-                                                  .bind("$1", event.id)
-                                                  .fetch()
-                                                  .all()
-                                                  .mapNotNull { it["player_id"] as? UUID }
-                                                  .collectList()
-                                                  .awaitFirstOrNull() ?: emptyList()
+                if (playerTags) {
+                    if (gameTags) {
+                        if (teamTags) {
+                            if (eventMetadata) {
+                                return@run nuts@{ time, event ->
+                                    players(time, event)
+                                    games(time, event)
+                                    teams(time, event)
+                                    metadata(time, event)
 
-                                event.playerTags?.filterNot(players::contains)
-                                    ?.forEach { playerID ->
-                                        nuts.client.sql("INSERT INTO player_nuts (feed_id, player_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", playerID)
-                                            .await()
-                                    }
+                                    insert(time, event)
+                                }
+                            } else {
+                                return@run nuts@{ time, event ->
+                                    players(time, event)
+                                    games(time, event)
+                                    teams(time, event)
+//                                    metadata(time, event)
 
-                                val games = nuts.client.sql("SELECT game_id FROM game_nuts WHERE feed_id = $1")
-                                                .bind("$1", event.id)
-                                                .fetch()
-                                                .all()
-                                                .mapNotNull { it["game_id"] as? UUID }
-                                                .collectList()
-                                                .awaitFirstOrNull() ?: emptyList()
-
-                                event.gameTags?.filterNot(games::contains)
-                                    ?.forEach { gameID ->
-                                        nuts.client.sql("INSERT INTO game_nuts (feed_id, game_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", gameID)
-                                            .await()
-                                    }
-
-                                val teams = nuts.client.sql("SELECT team_id FROM team_nuts WHERE feed_id = $1")
-                                                .bind("$1", event.id)
-                                                .fetch()
-                                                .all()
-                                                .mapNotNull { it["team_id"] as? UUID }
-                                                .collectList()
-                                                .awaitFirstOrNull() ?: emptyList()
-
-                                event.teamTags?.filterNot(teams::contains)
-                                    ?.forEach { teamID ->
-                                        nuts.client.sql("INSERT INTO team_nuts (feed_id, team_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", teamID)
-                                            .await()
-                                    }
-
-                                nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
-                                    .bind("$1", event.id)
-                                    .bind("$2", event.created.utc.unixMillisLong)
-                                    .bind("$3", event.season)
-                                    .bind("$4", event.tournament)
-                                    .bind("$5", event.type)
-                                    .bind("$6", event.day)
-                                    .bind("$7", event.phase)
-                                    .bind("$8", event.category)
-                                    .await()
-
-                                val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                                                .bind("$1", event.id)
-                                                                .bind("$2", time)
-                                                                .fetch()
-                                                                .first()
-                                                                .awaitFirstOrNull()
-                                                                ?.values
-                                                                ?.let { it.firstOrNull() as? Number }
-                                                                ?.toInt() ?: 0
-
-                                val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
-                                if (difference <= 0) return@nuts
-
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                    .bind("$1", difference)
-                                    .bind("$2", event.id)
-                                    .bind("$3", THE_GAME_BAND)
-                                    .bind("$4", time)
-                                    .await()
-
-                                logger.info("${event.id} +$difference")
+                                    insert(time, event)
+                                }
                             }
                         } else {
-                            return@run nuts@{ time, event ->
-                                val players = nuts.client.sql("SELECT player_id FROM player_nuts WHERE feed_id = $1")
-                                                  .bind("$1", event.id)
-                                                  .fetch()
-                                                  .all()
-                                                  .mapNotNull { it["player_id"] as? UUID }
-                                                  .collectList()
-                                                  .awaitFirstOrNull() ?: emptyList()
+                            if (eventMetadata) {
+                                return@run nuts@{ time, event ->
+                                    players(time, event)
+                                    games(time, event)
+//                                    teams(time, event)
+                                    metadata(time, event)
 
-                                event.playerTags?.filterNot(players::contains)
-                                    ?.forEach { playerID ->
-                                        nuts.client.sql("INSERT INTO player_nuts (feed_id, player_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", playerID)
-                                            .await()
-                                    }
+                                    insert(time, event)
+                                }
+                            } else {
+                                return@run nuts@{ time, event ->
+                                    players(time, event)
+                                    games(time, event)
+//                                    teams(time, event)
+//                                    metadata(time, event)
 
-                                val games = nuts.client.sql("SELECT game_id FROM game_nuts WHERE feed_id = $1")
-                                                .bind("$1", event.id)
-                                                .fetch()
-                                                .all()
-                                                .mapNotNull { it["game_id"] as? UUID }
-                                                .collectList()
-                                                .awaitFirstOrNull() ?: emptyList()
-
-                                event.gameTags?.filterNot(games::contains)
-                                    ?.forEach { gameID ->
-                                        nuts.client.sql("INSERT INTO game_nuts (feed_id, game_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", gameID)
-                                            .await()
-                                    }
-
-                                val teams = nuts.client.sql("SELECT team_id FROM team_nuts WHERE feed_id = $1")
-                                                .bind("$1", event.id)
-                                                .fetch()
-                                                .all()
-                                                .mapNotNull { it["team_id"] as? UUID }
-                                                .collectList()
-                                                .awaitFirstOrNull() ?: emptyList()
-
-                                event.teamTags?.filterNot(teams::contains)
-                                    ?.forEach { teamID ->
-                                        nuts.client.sql("INSERT INTO team_nuts (feed_id, team_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", teamID)
-                                            .await()
-                                    }
-
-                                val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                                                .bind("$1", event.id)
-                                                                .bind("$2", time)
-                                                                .fetch()
-                                                                .first()
-                                                                .awaitFirstOrNull()
-                                                                ?.values
-                                                                ?.let { it.firstOrNull() as? Number }
-                                                                ?.toInt() ?: 0
-
-                                val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
-                                if (difference <= 0) return@nuts
-
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                    .bind("$1", difference)
-                                    .bind("$2", event.id)
-                                    .bind("$3", THE_GAME_BAND)
-                                    .bind("$4", time)
-                                    .await()
-
-                                logger.info("${event.id} +$difference")
+                                    insert(time, event)
+                                }
                             }
                         }
                     } else {
-                        if (eventMetadata) {
-                            return@run nuts@{ time, event ->
-                                val players = nuts.client.sql("SELECT player_id FROM player_nuts WHERE feed_id = $1")
-                                                  .bind("$1", event.id)
-                                                  .fetch()
-                                                  .all()
-                                                  .mapNotNull { it["player_id"] as? UUID }
-                                                  .collectList()
-                                                  .awaitFirstOrNull() ?: emptyList()
+                        if (teamTags) {
+                            if (eventMetadata) {
+                                return@run nuts@{ time, event ->
+                                    players(time, event)
+//                                    games(time, event)
+                                    teams(time, event)
+                                    metadata(time, event)
 
-                                event.playerTags?.filterNot(players::contains)
-                                    ?.forEach { playerID ->
-                                        nuts.client.sql("INSERT INTO player_nuts (feed_id, player_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", playerID)
-                                            .await()
-                                    }
+                                    insert(time, event)
+                                }
+                            } else {
+                                return@run nuts@{ time, event ->
+                                    players(time, event)
+//                                    games(time, event)
+                                    teams(time, event)
+//                                    metadata(time, event)
 
-                                val games = nuts.client.sql("SELECT game_id FROM game_nuts WHERE feed_id = $1")
-                                                .bind("$1", event.id)
-                                                .fetch()
-                                                .all()
-                                                .mapNotNull { it["game_id"] as? UUID }
-                                                .collectList()
-                                                .awaitFirstOrNull() ?: emptyList()
-
-                                event.gameTags?.filterNot(games::contains)
-                                    ?.forEach { gameID ->
-                                        nuts.client.sql("INSERT INTO game_nuts (feed_id, game_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", gameID)
-                                            .await()
-                                    }
-
-                                nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
-                                    .bind("$1", event.id)
-                                    .bind("$2", event.created.utc.unixMillisLong)
-                                    .bind("$3", event.season)
-                                    .bind("$4", event.tournament)
-                                    .bind("$5", event.type)
-                                    .bind("$6", event.day)
-                                    .bind("$7", event.phase)
-                                    .bind("$8", event.category)
-                                    .await()
-
-                                val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                                                .bind("$1", event.id)
-                                                                .bind("$2", time)
-                                                                .fetch()
-                                                                .first()
-                                                                .awaitFirstOrNull()
-                                                                ?.values
-                                                                ?.let { it.firstOrNull() as? Number }
-                                                                ?.toInt() ?: 0
-
-                                val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
-                                if (difference <= 0) return@nuts
-
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                    .bind("$1", difference)
-                                    .bind("$2", event.id)
-                                    .bind("$3", THE_GAME_BAND)
-                                    .bind("$4", time)
-                                    .await()
-
-                                logger.info("${event.id} +$difference")
+                                    insert(time, event)
+                                }
                             }
                         } else {
-                            return@run nuts@{ time, event ->
-                                val players = nuts.client.sql("SELECT player_id FROM player_nuts WHERE feed_id = $1")
-                                                  .bind("$1", event.id)
-                                                  .fetch()
-                                                  .all()
-                                                  .mapNotNull { it["player_id"] as? UUID }
-                                                  .collectList()
-                                                  .awaitFirstOrNull() ?: emptyList()
+                            if (eventMetadata) {
+                                return@run nuts@{ time, event ->
+                                    players(time, event)
+//                                    games(time, event)
+//                                    teams(time, event)
+                                    metadata(time, event)
 
-                                event.playerTags?.filterNot(players::contains)
-                                    ?.forEach { playerID ->
-                                        nuts.client.sql("INSERT INTO player_nuts (feed_id, player_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", playerID)
-                                            .await()
-                                    }
+                                    insert(time, event)
+                                }
+                            } else {
+                                return@run nuts@{ time, event ->
+                                    players(time, event)
+//                                    games(time, event)
+//                                    teams(time, event)
+//                                    metadata(time, event)
 
-                                val games = nuts.client.sql("SELECT game_id FROM game_nuts WHERE feed_id = $1")
-                                                .bind("$1", event.id)
-                                                .fetch()
-                                                .all()
-                                                .mapNotNull { it["game_id"] as? UUID }
-                                                .collectList()
-                                                .awaitFirstOrNull() ?: emptyList()
-
-                                event.gameTags?.filterNot(games::contains)
-                                    ?.forEach { gameID ->
-                                        nuts.client.sql("INSERT INTO game_nuts (feed_id, game_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", gameID)
-                                            .await()
-                                    }
-
-                                val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                                                .bind("$1", event.id)
-                                                                .bind("$2", time)
-                                                                .fetch()
-                                                                .first()
-                                                                .awaitFirstOrNull()
-                                                                ?.values
-                                                                ?.let { it.firstOrNull() as? Number }
-                                                                ?.toInt() ?: 0
-
-                                val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
-                                if (difference <= 0) return@nuts
-
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                    .bind("$1", difference)
-                                    .bind("$2", event.id)
-                                    .bind("$3", THE_GAME_BAND)
-                                    .bind("$4", time)
-                                    .await()
-
-                                logger.info("${event.id} +$difference")
+                                    insert(time, event)
+                                }
                             }
                         }
                     }
                 } else {
-                    if (teamTags) {
-                        if (eventMetadata) {
-                            return@run nuts@{ time, event ->
-                                val teams = nuts.client.sql("SELECT team_id FROM team_nuts WHERE feed_id = $1")
-                                                .bind("$1", event.id)
-                                                .fetch()
-                                                .all()
-                                                .mapNotNull { it["team_id"] as? UUID }
-                                                .collectList()
-                                                .awaitFirstOrNull() ?: emptyList()
+                    if (gameTags) {
+                        if (teamTags) {
+                            if (eventMetadata) {
+                                return@run nuts@{ time, event ->
+//                                    players(time, event)
+                                    games(time, event)
+                                    teams(time, event)
+                                    metadata(time, event)
 
-                                event.teamTags?.filterNot(teams::contains)
-                                    ?.forEach { teamID ->
-                                        nuts.client.sql("INSERT INTO team_nuts (feed_id, team_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", teamID)
-                                            .await()
-                                    }
+                                    insert(time, event)
+                                }
+                            } else {
+                                return@run nuts@{ time, event ->
+//                                    players(time, event)
+                                    games(time, event)
+                                    teams(time, event)
+//                                    metadata(time, event)
 
-                                nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
-                                    .bind("$1", event.id)
-                                    .bind("$2", event.created.utc.unixMillisLong)
-                                    .bind("$3", event.season)
-                                    .bind("$4", event.tournament)
-                                    .bind("$5", event.type)
-                                    .bind("$6", event.day)
-                                    .bind("$7", event.phase)
-                                    .bind("$8", event.category)
-                                    .await()
-
-                                val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                                                .bind("$1", event.id)
-                                                                .bind("$2", time)
-                                                                .fetch()
-                                                                .first()
-                                                                .awaitFirstOrNull()
-                                                                ?.values
-                                                                ?.let { it.firstOrNull() as? Number }
-                                                                ?.toInt() ?: 0
-
-                                val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
-                                if (difference <= 0) return@nuts
-
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                    .bind("$1", difference)
-                                    .bind("$2", event.id)
-                                    .bind("$3", THE_GAME_BAND)
-                                    .bind("$4", time)
-                                    .await()
-
-                                logger.info("${event.id} +$difference")
+                                    insert(time, event)
+                                }
                             }
                         } else {
-                            return@run nuts@{ time, event ->
-                                val teams = nuts.client.sql("SELECT team_id FROM team_nuts WHERE feed_id = $1")
-                                                .bind("$1", event.id)
-                                                .fetch()
-                                                .all()
-                                                .mapNotNull { it["team_id"] as? UUID }
-                                                .collectList()
-                                                .awaitFirstOrNull() ?: emptyList()
+                            if (eventMetadata) {
+                                return@run nuts@{ time, event ->
+//                                    players(time, event)
+                                    games(time, event)
+//                                    teams(time, event)
+                                    metadata(time, event)
 
-                                event.teamTags?.filterNot(teams::contains)
-                                    ?.forEach { teamID ->
-                                        nuts.client.sql("INSERT INTO team_nuts (feed_id, team_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", teamID)
-                                            .await()
-                                    }
+                                    insert(time, event)
+                                }
+                            } else {
+                                return@run nuts@{ time, event ->
+//                                    players(time, event)
+                                    games(time, event)
+//                                    teams(time, event)
+//                                    metadata(time, event)
 
-                                val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                                                .bind("$1", event.id)
-                                                                .bind("$2", time)
-                                                                .fetch()
-                                                                .first()
-                                                                .awaitFirstOrNull()
-                                                                ?.values
-                                                                ?.let { it.firstOrNull() as? Number }
-                                                                ?.toInt() ?: 0
-
-                                val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
-                                if (difference <= 0) return@nuts
-
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                    .bind("$1", difference)
-                                    .bind("$2", event.id)
-                                    .bind("$3", THE_GAME_BAND)
-                                    .bind("$4", time)
-                                    .await()
-
-                                logger.info("${event.id} +$difference")
+                                    insert(time, event)
+                                }
                             }
                         }
                     } else {
-                        if (eventMetadata) {
-                            return@run nuts@{ time, event ->
-                                nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
-                                    .bind("$1", event.id)
-                                    .bind("$2", event.created.utc.unixMillisLong)
-                                    .bind("$3", event.season)
-                                    .bind("$4", event.tournament)
-                                    .bind("$5", event.type)
-                                    .bind("$6", event.day)
-                                    .bind("$7", event.phase)
-                                    .bind("$8", event.category)
-                                    .await()
+                        if (teamTags) {
+                            if (eventMetadata) {
+                                return@run nuts@{ time, event ->
+//                                    players(time, event)
+//                                    games(time, event)
+                                    teams(time, event)
+                                    metadata(time, event)
 
-                                val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                                                .bind("$1", event.id)
-                                                                .bind("$2", time)
-                                                                .fetch()
-                                                                .first()
-                                                                .awaitFirstOrNull()
-                                                                ?.values
-                                                                ?.let { it.firstOrNull() as? Number }
-                                                                ?.toInt() ?: 0
+                                    insert(time, event)
+                                }
+                            } else {
+                                return@run nuts@{ time, event ->
+//                                    players(time, event)
+//                                    games(time, event)
+                                    teams(time, event)
+//                                    metadata(time, event)
 
-                                val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
-                                if (difference <= 0) return@nuts
-
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                    .bind("$1", difference)
-                                    .bind("$2", event.id)
-                                    .bind("$3", THE_GAME_BAND)
-                                    .bind("$4", time)
-                                    .await()
-
-                                logger.info("${event.id} +$difference")
+                                    insert(time, event)
+                                }
                             }
                         } else {
-                            return@run nuts@{ time, event ->
-                                val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                                                .bind("$1", event.id)
-                                                                .bind("$2", time)
-                                                                .fetch()
-                                                                .first()
-                                                                .awaitFirstOrNull()
-                                                                ?.values
-                                                                ?.let { it.firstOrNull() as? Number }
-                                                                ?.toInt() ?: 0
+                            if (eventMetadata) {
+                                return@run nuts@{ time, event ->
+//                                    players(time, event)
+//                                    games(time, event)
+//                                    teams(time, event)
+                                    metadata(time, event)
 
-                                val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
-                                if (difference <= 0) return@nuts
+                                    insert(time, event)
+                                }
+                            } else {
+                                return@run nuts@{ time, event ->
+//                                    players(time, event)
+//                                    games(time, event)
+//                                    teams(time, event)
+//                                    metadata(time, event)
 
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                    .bind("$1", difference)
-                                    .bind("$2", event.id)
-                                    .bind("$3", THE_GAME_BAND)
-                                    .bind("$4", time)
-                                    .await()
-
-                                logger.info("${event.id} +$difference")
+                                    insert(time, event)
+                                }
                             }
                         }
                     }
                 }
             }
-        } else {
-            if (playerTags) {
-                if (gameTags) {
-                    if (teamTags) {
-                        if (eventMetadata) {
-                            return@run nuts@{ time, event ->
-                                val players = nuts.client.sql("SELECT player_id FROM player_nuts WHERE feed_id = $1")
-                                                  .bind("$1", event.id)
-                                                  .fetch()
-                                                  .all()
-                                                  .mapNotNull { it["player_id"] as? UUID }
-                                                  .collectList()
-                                                  .awaitFirstOrNull() ?: emptyList()
+        }
+    }
 
-                                event.playerTags?.filterNot(players::contains)
-                                    ?.forEach { playerID ->
-                                        nuts.client.sql("INSERT INTO player_nuts (feed_id, player_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", playerID)
-                                            .await()
-                                    }
+    val processNuts: suspend (time: Long, event: UpNutEvent) -> Unit = NutBuilder().build()
 
-                                val games = nuts.client.sql("SELECT game_id FROM game_nuts WHERE feed_id = $1")
-                                                .bind("$1", event.id)
-                                                .fetch()
-                                                .all()
-                                                .mapNotNull { it["game_id"] as? UUID }
-                                                .collectList()
-                                                .awaitFirstOrNull() ?: emptyList()
+    data class ResendEvent(val id: Long, val sendTo: String, val data: ByteArray, val created: DateTimeTz) {
+        constructor(row: Row) : this(row.getValue("id"), row.getValue("send_to"), row.getValue("data"), DateTime.fromUnix(row.getValue<Long>("created")).utc)
+    }
 
-                                event.gameTags?.filterNot(games::contains)
-                                    ?.forEach { gameID ->
-                                        nuts.client.sql("INSERT INTO game_nuts (feed_id, game_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", gameID)
-                                            .await()
-                                    }
+    @OptIn(ExperimentalTime::class)
+    val resendJob = launch {
+        val logger = LoggerFactory.getLogger("dev.brella.blasement.upnut.ingest.Resend")
 
-                                val teams = nuts.client.sql("SELECT team_id FROM team_nuts WHERE feed_id = $1")
-                                                .bind("$1", event.id)
-                                                .fetch()
-                                                .all()
-                                                .mapNotNull { it["team_id"] as? UUID }
-                                                .collectList()
-                                                .awaitFirstOrNull() ?: emptyList()
+        val limit = getIntInScope("resend", "limit", 100)
+        val loopEvery = getIntInScope("resend", "loop_duration_s", 60)
+        val delay = getLongInScope("resend", "delay_ms", 100)
+        val delayOnFailure = getLongInScope("resend", "delay_on_failure_ms", 100)
+        val totalLimit = getLongInScope("resend", "total_limit", Long.MAX_VALUE)
 
-                                event.teamTags?.filterNot(teams::contains)
-                                    ?.forEach { teamID ->
-                                        nuts.client.sql("INSERT INTO team_nuts (feed_id, team_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", teamID)
-                                            .await()
-                                    }
+        loopEvery(loopEvery.seconds, `while` = { isActive }) {
+            val eventsToDeliver = nuts.client.sql("SELECT id, send_to, data, created FROM events WHERE sent_at IS NULL")
+                                      .map(::ResendEvent)
+                                      .all()
+                                      .collectList()
+                                      .awaitFirstOrNull()
+                                      ?.groupBy(ResendEvent::sendTo) ?: return@loopEvery
 
-                                nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
-                                    .bind("$1", event.id)
-                                    .bind("$2", event.created.utc.unixMillisLong)
-                                    .bind("$3", event.season)
-                                    .bind("$4", event.tournament)
-                                    .bind("$5", event.type)
-                                    .bind("$6", event.day)
-                                    .bind("$7", event.phase)
-                                    .bind("$8", event.category)
-                                    .await()
+            logger.info("Resending {} events", eventsToDeliver.size)
 
-                                val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                                                .bind("$1", event.id)
-                                                                .bind("$2", time)
-                                                                .fetch()
-                                                                .first()
-                                                                .awaitFirstOrNull()
-                                                                ?.values
-                                                                ?.let { it.firstOrNull() as? Number }
-                                                                ?.toInt() ?: 0
+            val tokens = eventsToDeliver.keys.associateWith { url ->
+                nuts.client.sql("SELECT secret_key FROM webhooks WHERE url = $1")
+                    .bind("$1", url)
+                    .map { row -> row.getValue<ByteArray>("secret_key") }
+                    .first()
+                    .awaitFirstOrNull()
+            }
 
-                                val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
-                                if (difference <= 0) return@nuts
-
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                    .bind("$1", difference)
-                                    .bind("$2", event.id)
-                                    .bind("$3", THE_GAME_BAND)
-                                    .bind("$4", time)
-                                    .await()
-
-
-                            }
-                        } else {
-                            return@run nuts@{ time, event ->
-                                val players = nuts.client.sql("SELECT player_id FROM player_nuts WHERE feed_id = $1")
-                                                  .bind("$1", event.id)
-                                                  .fetch()
-                                                  .all()
-                                                  .mapNotNull { it["player_id"] as? UUID }
-                                                  .collectList()
-                                                  .awaitFirstOrNull() ?: emptyList()
-
-                                event.playerTags?.filterNot(players::contains)
-                                    ?.forEach { playerID ->
-                                        nuts.client.sql("INSERT INTO player_nuts (feed_id, player_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", playerID)
-                                            .await()
-                                    }
-
-                                val games = nuts.client.sql("SELECT game_id FROM game_nuts WHERE feed_id = $1")
-                                                .bind("$1", event.id)
-                                                .fetch()
-                                                .all()
-                                                .mapNotNull { it["game_id"] as? UUID }
-                                                .collectList()
-                                                .awaitFirstOrNull() ?: emptyList()
-
-                                event.gameTags?.filterNot(games::contains)
-                                    ?.forEach { gameID ->
-                                        nuts.client.sql("INSERT INTO game_nuts (feed_id, game_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", gameID)
-                                            .await()
-                                    }
-
-                                val teams = nuts.client.sql("SELECT team_id FROM team_nuts WHERE feed_id = $1")
-                                                .bind("$1", event.id)
-                                                .fetch()
-                                                .all()
-                                                .mapNotNull { it["team_id"] as? UUID }
-                                                .collectList()
-                                                .awaitFirstOrNull() ?: emptyList()
-
-                                event.teamTags?.filterNot(teams::contains)
-                                    ?.forEach { teamID ->
-                                        nuts.client.sql("INSERT INTO team_nuts (feed_id, team_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", teamID)
-                                            .await()
-                                    }
-
-                                val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                                                .bind("$1", event.id)
-                                                                .bind("$2", time)
-                                                                .fetch()
-                                                                .first()
-                                                                .awaitFirstOrNull()
-                                                                ?.values
-                                                                ?.let { it.firstOrNull() as? Number }
-                                                                ?.toInt() ?: 0
-
-                                val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
-                                if (difference <= 0) return@nuts
-
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                    .bind("$1", difference)
-                                    .bind("$2", event.id)
-                                    .bind("$3", THE_GAME_BAND)
-                                    .bind("$4", time)
-                                    .await()
-                            }
-                        }
+            eventsToDeliver.forEach outer@{ (url, eventList) ->
+                val token = tokens[url] ?: return@outer
+                eventList.forEach { event ->
+                    if (postEventTo(url, token, event.data) is KorneaResult.Success) {
+                        nuts.client.sql("UPDATE events SET sent_at = $1 WHERE id = $2")
+                            .bind("$1", now())
+                            .bind("$2", event.id)
+                            .await()
                     } else {
-                        if (eventMetadata) {
-                            return@run nuts@{ time, event ->
-                                val players = nuts.client.sql("SELECT player_id FROM player_nuts WHERE feed_id = $1")
-                                                  .bind("$1", event.id)
-                                                  .fetch()
-                                                  .all()
-                                                  .mapNotNull { it["player_id"] as? UUID }
-                                                  .collectList()
-                                                  .awaitFirstOrNull() ?: emptyList()
-
-                                event.playerTags?.filterNot(players::contains)
-                                    ?.forEach { playerID ->
-                                        nuts.client.sql("INSERT INTO player_nuts (feed_id, player_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", playerID)
-                                            .await()
-                                    }
-
-                                val games = nuts.client.sql("SELECT game_id FROM game_nuts WHERE feed_id = $1")
-                                                .bind("$1", event.id)
-                                                .fetch()
-                                                .all()
-                                                .mapNotNull { it["game_id"] as? UUID }
-                                                .collectList()
-                                                .awaitFirstOrNull() ?: emptyList()
-
-                                event.gameTags?.filterNot(games::contains)
-                                    ?.forEach { gameID ->
-                                        nuts.client.sql("INSERT INTO game_nuts (feed_id, game_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", gameID)
-                                            .await()
-                                    }
-
-                                nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
-                                    .bind("$1", event.id)
-                                    .bind("$2", event.created.utc.unixMillisLong)
-                                    .bind("$3", event.season)
-                                    .bind("$4", event.tournament)
-                                    .bind("$5", event.type)
-                                    .bind("$6", event.day)
-                                    .bind("$7", event.phase)
-                                    .bind("$8", event.category)
-                                    .await()
-
-                                val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                                                .bind("$1", event.id)
-                                                                .bind("$2", time)
-                                                                .fetch()
-                                                                .first()
-                                                                .awaitFirstOrNull()
-                                                                ?.values
-                                                                ?.let { it.firstOrNull() as? Number }
-                                                                ?.toInt() ?: 0
-
-                                val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
-                                if (difference <= 0) return@nuts
-
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                    .bind("$1", difference)
-                                    .bind("$2", event.id)
-                                    .bind("$3", THE_GAME_BAND)
-                                    .bind("$4", time)
-                                    .await()
-                            }
-                        } else {
-                            return@run nuts@{ time, event ->
-                                val players = nuts.client.sql("SELECT player_id FROM player_nuts WHERE feed_id = $1")
-                                                  .bind("$1", event.id)
-                                                  .fetch()
-                                                  .all()
-                                                  .mapNotNull { it["player_id"] as? UUID }
-                                                  .collectList()
-                                                  .awaitFirstOrNull() ?: emptyList()
-
-                                event.playerTags?.filterNot(players::contains)
-                                    ?.forEach { playerID ->
-                                        nuts.client.sql("INSERT INTO player_nuts (feed_id, player_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", playerID)
-                                            .await()
-                                    }
-
-                                val games = nuts.client.sql("SELECT game_id FROM game_nuts WHERE feed_id = $1")
-                                                .bind("$1", event.id)
-                                                .fetch()
-                                                .all()
-                                                .mapNotNull { it["game_id"] as? UUID }
-                                                .collectList()
-                                                .awaitFirstOrNull() ?: emptyList()
-
-                                event.gameTags?.filterNot(games::contains)
-                                    ?.forEach { gameID ->
-                                        nuts.client.sql("INSERT INTO game_nuts (feed_id, game_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", gameID)
-                                            .await()
-                                    }
-
-                                val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                                                .bind("$1", event.id)
-                                                                .bind("$2", time)
-                                                                .fetch()
-                                                                .first()
-                                                                .awaitFirstOrNull()
-                                                                ?.values
-                                                                ?.let { it.firstOrNull() as? Number }
-                                                                ?.toInt() ?: 0
-
-                                val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
-                                if (difference <= 0) return@nuts
-
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                    .bind("$1", difference)
-                                    .bind("$2", event.id)
-                                    .bind("$3", THE_GAME_BAND)
-                                    .bind("$4", time)
-                                    .await()
-                            }
-                        }
-                    }
-                } else {
-                    if (teamTags) {
-                        if (eventMetadata) {
-                            return@run nuts@{ time, event ->
-                                val players = nuts.client.sql("SELECT player_id FROM player_nuts WHERE feed_id = $1")
-                                                  .bind("$1", event.id)
-                                                  .fetch()
-                                                  .all()
-                                                  .mapNotNull { it["player_id"] as? UUID }
-                                                  .collectList()
-                                                  .awaitFirstOrNull() ?: emptyList()
-
-                                event.playerTags?.filterNot(players::contains)
-                                    ?.forEach { playerID ->
-                                        nuts.client.sql("INSERT INTO player_nuts (feed_id, player_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", playerID)
-                                            .await()
-                                    }
-
-                                val teams = nuts.client.sql("SELECT team_id FROM team_nuts WHERE feed_id = $1")
-                                                .bind("$1", event.id)
-                                                .fetch()
-                                                .all()
-                                                .mapNotNull { it["team_id"] as? UUID }
-                                                .collectList()
-                                                .awaitFirstOrNull() ?: emptyList()
-
-                                event.teamTags?.filterNot(teams::contains)
-                                    ?.forEach { teamID ->
-                                        nuts.client.sql("INSERT INTO team_nuts (feed_id, team_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", teamID)
-                                            .await()
-                                    }
-
-                                nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
-                                    .bind("$1", event.id)
-                                    .bind("$2", event.created.utc.unixMillisLong)
-                                    .bind("$3", event.season)
-                                    .bind("$4", event.tournament)
-                                    .bind("$5", event.type)
-                                    .bind("$6", event.day)
-                                    .bind("$7", event.phase)
-                                    .bind("$8", event.category)
-                                    .await()
-
-                                val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                                                .bind("$1", event.id)
-                                                                .bind("$2", time)
-                                                                .fetch()
-                                                                .first()
-                                                                .awaitFirstOrNull()
-                                                                ?.values
-                                                                ?.let { it.firstOrNull() as? Number }
-                                                                ?.toInt() ?: 0
-
-                                val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
-                                if (difference <= 0) return@nuts
-
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                    .bind("$1", difference)
-                                    .bind("$2", event.id)
-                                    .bind("$3", THE_GAME_BAND)
-                                    .bind("$4", time)
-                                    .await()
-                            }
-                        } else {
-                            return@run nuts@{ time, event ->
-                                val players = nuts.client.sql("SELECT player_id FROM player_nuts WHERE feed_id = $1")
-                                                  .bind("$1", event.id)
-                                                  .fetch()
-                                                  .all()
-                                                  .mapNotNull { it["player_id"] as? UUID }
-                                                  .collectList()
-                                                  .awaitFirstOrNull() ?: emptyList()
-
-                                event.playerTags?.filterNot(players::contains)
-                                    ?.forEach { playerID ->
-                                        nuts.client.sql("INSERT INTO player_nuts (feed_id, player_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", playerID)
-                                            .await()
-                                    }
-
-                                val teams = nuts.client.sql("SELECT team_id FROM team_nuts WHERE feed_id = $1")
-                                                .bind("$1", event.id)
-                                                .fetch()
-                                                .all()
-                                                .mapNotNull { it["team_id"] as? UUID }
-                                                .collectList()
-                                                .awaitFirstOrNull() ?: emptyList()
-
-                                event.teamTags?.filterNot(teams::contains)
-                                    ?.forEach { teamID ->
-                                        nuts.client.sql("INSERT INTO team_nuts (feed_id, team_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", teamID)
-                                            .await()
-                                    }
-
-                                val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                                                .bind("$1", event.id)
-                                                                .bind("$2", time)
-                                                                .fetch()
-                                                                .first()
-                                                                .awaitFirstOrNull()
-                                                                ?.values
-                                                                ?.let { it.firstOrNull() as? Number }
-                                                                ?.toInt() ?: 0
-
-                                val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
-                                if (difference <= 0) return@nuts
-
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                    .bind("$1", difference)
-                                    .bind("$2", event.id)
-                                    .bind("$3", THE_GAME_BAND)
-                                    .bind("$4", time)
-                                    .await()
-                            }
-                        }
-                    } else {
-                        if (eventMetadata) {
-                            return@run nuts@{ time, event ->
-                                val players = nuts.client.sql("SELECT player_id FROM player_nuts WHERE feed_id = $1")
-                                                  .bind("$1", event.id)
-                                                  .fetch()
-                                                  .all()
-                                                  .mapNotNull { it["player_id"] as? UUID }
-                                                  .collectList()
-                                                  .awaitFirstOrNull() ?: emptyList()
-
-                                event.playerTags?.filterNot(players::contains)
-                                    ?.forEach { playerID ->
-                                        nuts.client.sql("INSERT INTO player_nuts (feed_id, player_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", playerID)
-                                            .await()
-                                    }
-
-                                nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
-                                    .bind("$1", event.id)
-                                    .bind("$2", event.created.utc.unixMillisLong)
-                                    .bind("$3", event.season)
-                                    .bind("$4", event.tournament)
-                                    .bind("$5", event.type)
-                                    .bind("$6", event.day)
-                                    .bind("$7", event.phase)
-                                    .bind("$8", event.category)
-                                    .await()
-
-                                val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                                                .bind("$1", event.id)
-                                                                .bind("$2", time)
-                                                                .fetch()
-                                                                .first()
-                                                                .awaitFirstOrNull()
-                                                                ?.values
-                                                                ?.let { it.firstOrNull() as? Number }
-                                                                ?.toInt() ?: 0
-
-                                val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
-                                if (difference <= 0) return@nuts
-
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                    .bind("$1", difference)
-                                    .bind("$2", event.id)
-                                    .bind("$3", THE_GAME_BAND)
-                                    .bind("$4", time)
-                                    .await()
-                            }
-                        } else {
-                            return@run nuts@{ time, event ->
-                                val players = nuts.client.sql("SELECT player_id FROM player_nuts WHERE feed_id = $1")
-                                                  .bind("$1", event.id)
-                                                  .fetch()
-                                                  .all()
-                                                  .mapNotNull { it["player_id"] as? UUID }
-                                                  .collectList()
-                                                  .awaitFirstOrNull() ?: emptyList()
-
-                                event.playerTags?.filterNot(players::contains)
-                                    ?.forEach { playerID ->
-                                        nuts.client.sql("INSERT INTO player_nuts (feed_id, player_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", playerID)
-                                            .await()
-                                    }
-
-                                val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                                                .bind("$1", event.id)
-                                                                .bind("$2", time)
-                                                                .fetch()
-                                                                .first()
-                                                                .awaitFirstOrNull()
-                                                                ?.values
-                                                                ?.let { it.firstOrNull() as? Number }
-                                                                ?.toInt() ?: 0
-
-                                val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
-                                if (difference <= 0) return@nuts
-
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                    .bind("$1", difference)
-                                    .bind("$2", event.id)
-                                    .bind("$3", THE_GAME_BAND)
-                                    .bind("$4", time)
-                                    .await()
-                            }
-                        }
-                    }
-                }
-            } else {
-                if (gameTags) {
-                    if (teamTags) {
-                        if (eventMetadata) {
-                            return@run nuts@{ time, event ->
-                                val players = nuts.client.sql("SELECT player_id FROM player_nuts WHERE feed_id = $1")
-                                                  .bind("$1", event.id)
-                                                  .fetch()
-                                                  .all()
-                                                  .mapNotNull { it["player_id"] as? UUID }
-                                                  .collectList()
-                                                  .awaitFirstOrNull() ?: emptyList()
-
-                                event.playerTags?.filterNot(players::contains)
-                                    ?.forEach { playerID ->
-                                        nuts.client.sql("INSERT INTO player_nuts (feed_id, player_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", playerID)
-                                            .await()
-                                    }
-
-                                val games = nuts.client.sql("SELECT game_id FROM game_nuts WHERE feed_id = $1")
-                                                .bind("$1", event.id)
-                                                .fetch()
-                                                .all()
-                                                .mapNotNull { it["game_id"] as? UUID }
-                                                .collectList()
-                                                .awaitFirstOrNull() ?: emptyList()
-
-                                event.gameTags?.filterNot(games::contains)
-                                    ?.forEach { gameID ->
-                                        nuts.client.sql("INSERT INTO game_nuts (feed_id, game_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", gameID)
-                                            .await()
-                                    }
-
-                                val teams = nuts.client.sql("SELECT team_id FROM team_nuts WHERE feed_id = $1")
-                                                .bind("$1", event.id)
-                                                .fetch()
-                                                .all()
-                                                .mapNotNull { it["team_id"] as? UUID }
-                                                .collectList()
-                                                .awaitFirstOrNull() ?: emptyList()
-
-                                event.teamTags?.filterNot(teams::contains)
-                                    ?.forEach { teamID ->
-                                        nuts.client.sql("INSERT INTO team_nuts (feed_id, team_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", teamID)
-                                            .await()
-                                    }
-
-                                nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
-                                    .bind("$1", event.id)
-                                    .bind("$2", event.created.utc.unixMillisLong)
-                                    .bind("$3", event.season)
-                                    .bind("$4", event.tournament)
-                                    .bind("$5", event.type)
-                                    .bind("$6", event.day)
-                                    .bind("$7", event.phase)
-                                    .bind("$8", event.category)
-                                    .await()
-
-                                val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                                                .bind("$1", event.id)
-                                                                .bind("$2", time)
-                                                                .fetch()
-                                                                .first()
-                                                                .awaitFirstOrNull()
-                                                                ?.values
-                                                                ?.let { it.firstOrNull() as? Number }
-                                                                ?.toInt() ?: 0
-
-                                val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
-                                if (difference <= 0) return@nuts
-
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                    .bind("$1", difference)
-                                    .bind("$2", event.id)
-                                    .bind("$3", THE_GAME_BAND)
-                                    .bind("$4", time)
-                                    .await()
-
-
-                            }
-                        } else {
-                            return@run nuts@{ time, event ->
-                                val players = nuts.client.sql("SELECT player_id FROM player_nuts WHERE feed_id = $1")
-                                                  .bind("$1", event.id)
-                                                  .fetch()
-                                                  .all()
-                                                  .mapNotNull { it["player_id"] as? UUID }
-                                                  .collectList()
-                                                  .awaitFirstOrNull() ?: emptyList()
-
-                                event.playerTags?.filterNot(players::contains)
-                                    ?.forEach { playerID ->
-                                        nuts.client.sql("INSERT INTO player_nuts (feed_id, player_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", playerID)
-                                            .await()
-                                    }
-
-                                val games = nuts.client.sql("SELECT game_id FROM game_nuts WHERE feed_id = $1")
-                                                .bind("$1", event.id)
-                                                .fetch()
-                                                .all()
-                                                .mapNotNull { it["game_id"] as? UUID }
-                                                .collectList()
-                                                .awaitFirstOrNull() ?: emptyList()
-
-                                event.gameTags?.filterNot(games::contains)
-                                    ?.forEach { gameID ->
-                                        nuts.client.sql("INSERT INTO game_nuts (feed_id, game_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", gameID)
-                                            .await()
-                                    }
-
-                                val teams = nuts.client.sql("SELECT team_id FROM team_nuts WHERE feed_id = $1")
-                                                .bind("$1", event.id)
-                                                .fetch()
-                                                .all()
-                                                .mapNotNull { it["team_id"] as? UUID }
-                                                .collectList()
-                                                .awaitFirstOrNull() ?: emptyList()
-
-                                event.teamTags?.filterNot(teams::contains)
-                                    ?.forEach { teamID ->
-                                        nuts.client.sql("INSERT INTO team_nuts (feed_id, team_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", teamID)
-                                            .await()
-                                    }
-
-                                val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                                                .bind("$1", event.id)
-                                                                .bind("$2", time)
-                                                                .fetch()
-                                                                .first()
-                                                                .awaitFirstOrNull()
-                                                                ?.values
-                                                                ?.let { it.firstOrNull() as? Number }
-                                                                ?.toInt() ?: 0
-
-                                val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
-                                if (difference <= 0) return@nuts
-
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                    .bind("$1", difference)
-                                    .bind("$2", event.id)
-                                    .bind("$3", THE_GAME_BAND)
-                                    .bind("$4", time)
-                                    .await()
-
-
-                            }
-                        }
-                    } else {
-                        if (eventMetadata) {
-                            return@run nuts@{ time, event ->
-                                val players = nuts.client.sql("SELECT player_id FROM player_nuts WHERE feed_id = $1")
-                                                  .bind("$1", event.id)
-                                                  .fetch()
-                                                  .all()
-                                                  .mapNotNull { it["player_id"] as? UUID }
-                                                  .collectList()
-                                                  .awaitFirstOrNull() ?: emptyList()
-
-                                event.playerTags?.filterNot(players::contains)
-                                    ?.forEach { playerID ->
-                                        nuts.client.sql("INSERT INTO player_nuts (feed_id, player_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", playerID)
-                                            .await()
-                                    }
-
-                                val games = nuts.client.sql("SELECT game_id FROM game_nuts WHERE feed_id = $1")
-                                                .bind("$1", event.id)
-                                                .fetch()
-                                                .all()
-                                                .mapNotNull { it["game_id"] as? UUID }
-                                                .collectList()
-                                                .awaitFirstOrNull() ?: emptyList()
-
-                                event.gameTags?.filterNot(games::contains)
-                                    ?.forEach { gameID ->
-                                        nuts.client.sql("INSERT INTO game_nuts (feed_id, game_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", gameID)
-                                            .await()
-                                    }
-
-                                nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
-                                    .bind("$1", event.id)
-                                    .bind("$2", event.created.utc.unixMillisLong)
-                                    .bind("$3", event.season)
-                                    .bind("$4", event.tournament)
-                                    .bind("$5", event.type)
-                                    .bind("$6", event.day)
-                                    .bind("$7", event.phase)
-                                    .bind("$8", event.category)
-                                    .await()
-
-                                val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                                                .bind("$1", event.id)
-                                                                .bind("$2", time)
-                                                                .fetch()
-                                                                .first()
-                                                                .awaitFirstOrNull()
-                                                                ?.values
-                                                                ?.let { it.firstOrNull() as? Number }
-                                                                ?.toInt() ?: 0
-
-                                val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
-                                if (difference <= 0) return@nuts
-
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                    .bind("$1", difference)
-                                    .bind("$2", event.id)
-                                    .bind("$3", THE_GAME_BAND)
-                                    .bind("$4", time)
-                                    .await()
-
-
-                            }
-                        } else {
-                            return@run nuts@{ time, event ->
-                                val players = nuts.client.sql("SELECT player_id FROM player_nuts WHERE feed_id = $1")
-                                                  .bind("$1", event.id)
-                                                  .fetch()
-                                                  .all()
-                                                  .mapNotNull { it["player_id"] as? UUID }
-                                                  .collectList()
-                                                  .awaitFirstOrNull() ?: emptyList()
-
-                                event.playerTags?.filterNot(players::contains)
-                                    ?.forEach { playerID ->
-                                        nuts.client.sql("INSERT INTO player_nuts (feed_id, player_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", playerID)
-                                            .await()
-                                    }
-
-                                val games = nuts.client.sql("SELECT game_id FROM game_nuts WHERE feed_id = $1")
-                                                .bind("$1", event.id)
-                                                .fetch()
-                                                .all()
-                                                .mapNotNull { it["game_id"] as? UUID }
-                                                .collectList()
-                                                .awaitFirstOrNull() ?: emptyList()
-
-                                event.gameTags?.filterNot(games::contains)
-                                    ?.forEach { gameID ->
-                                        nuts.client.sql("INSERT INTO game_nuts (feed_id, game_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", gameID)
-                                            .await()
-                                    }
-
-                                val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                                                .bind("$1", event.id)
-                                                                .bind("$2", time)
-                                                                .fetch()
-                                                                .first()
-                                                                .awaitFirstOrNull()
-                                                                ?.values
-                                                                ?.let { it.firstOrNull() as? Number }
-                                                                ?.toInt() ?: 0
-
-                                val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
-                                if (difference <= 0) return@nuts
-
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                    .bind("$1", difference)
-                                    .bind("$2", event.id)
-                                    .bind("$3", THE_GAME_BAND)
-                                    .bind("$4", time)
-                                    .await()
-
-
-                            }
-                        }
-                    }
-                } else {
-                    if (teamTags) {
-                        if (eventMetadata) {
-                            return@run nuts@{ time, event ->
-                                val teams = nuts.client.sql("SELECT team_id FROM team_nuts WHERE feed_id = $1")
-                                                .bind("$1", event.id)
-                                                .fetch()
-                                                .all()
-                                                .mapNotNull { it["team_id"] as? UUID }
-                                                .collectList()
-                                                .awaitFirstOrNull() ?: emptyList()
-
-                                event.teamTags?.filterNot(teams::contains)
-                                    ?.forEach { teamID ->
-                                        nuts.client.sql("INSERT INTO team_nuts (feed_id, team_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", teamID)
-                                            .await()
-                                    }
-
-                                nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
-                                    .bind("$1", event.id)
-                                    .bind("$2", event.created.utc.unixMillisLong)
-                                    .bind("$3", event.season)
-                                    .bind("$4", event.tournament)
-                                    .bind("$5", event.type)
-                                    .bind("$6", event.day)
-                                    .bind("$7", event.phase)
-                                    .bind("$8", event.category)
-                                    .await()
-
-                                val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                                                .bind("$1", event.id)
-                                                                .bind("$2", time)
-                                                                .fetch()
-                                                                .first()
-                                                                .awaitFirstOrNull()
-                                                                ?.values
-                                                                ?.let { it.firstOrNull() as? Number }
-                                                                ?.toInt() ?: 0
-
-                                val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
-                                if (difference <= 0) return@nuts
-
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                    .bind("$1", difference)
-                                    .bind("$2", event.id)
-                                    .bind("$3", THE_GAME_BAND)
-                                    .bind("$4", time)
-                                    .await()
-
-
-                            }
-                        } else {
-                            return@run nuts@{ time, event ->
-                                val teams = nuts.client.sql("SELECT team_id FROM team_nuts WHERE feed_id = $1")
-                                                .bind("$1", event.id)
-                                                .fetch()
-                                                .all()
-                                                .mapNotNull { it["team_id"] as? UUID }
-                                                .collectList()
-                                                .awaitFirstOrNull() ?: emptyList()
-
-                                event.teamTags?.filterNot(teams::contains)
-                                    ?.forEach { teamID ->
-                                        nuts.client.sql("INSERT INTO team_nuts (feed_id, team_id) VALUES ($1, $2)")
-                                            .bind("$1", event.id)
-                                            .bind("$2", teamID)
-                                            .await()
-                                    }
-
-                                val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                                                .bind("$1", event.id)
-                                                                .bind("$2", time)
-                                                                .fetch()
-                                                                .first()
-                                                                .awaitFirstOrNull()
-                                                                ?.values
-                                                                ?.let { it.firstOrNull() as? Number }
-                                                                ?.toInt() ?: 0
-
-                                val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
-                                if (difference <= 0) return@nuts
-
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                    .bind("$1", difference)
-                                    .bind("$2", event.id)
-                                    .bind("$3", THE_GAME_BAND)
-                                    .bind("$4", time)
-                                    .await()
-
-
-                            }
-                        }
-                    } else {
-                        if (eventMetadata) {
-                            return@run nuts@{ time, event ->
-                                nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
-                                    .bind("$1", event.id)
-                                    .bind("$2", event.created.utc.unixMillisLong)
-                                    .bind("$3", event.season)
-                                    .bind("$4", event.tournament)
-                                    .bind("$5", event.type)
-                                    .bind("$6", event.day)
-                                    .bind("$7", event.phase)
-                                    .bind("$8", event.category)
-                                    .await()
-
-                                val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                                                .bind("$1", event.id)
-                                                                .bind("$2", time)
-                                                                .fetch()
-                                                                .first()
-                                                                .awaitFirstOrNull()
-                                                                ?.values
-                                                                ?.let { it.firstOrNull() as? Number }
-                                                                ?.toInt() ?: 0
-
-                                val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
-                                if (difference <= 0) return@nuts
-
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                    .bind("$1", difference)
-                                    .bind("$2", event.id)
-                                    .bind("$3", THE_GAME_BAND)
-                                    .bind("$4", time)
-                                    .await()
-
-
-                            }
-                        } else {
-                            return@run nuts@{ time, event ->
-                                val nutsAtTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS sum FROM upnuts WHERE feed_id = $1 AND time <= $2")
-                                                                .bind("$1", event.id)
-                                                                .bind("$2", time)
-                                                                .fetch()
-                                                                .first()
-                                                                .awaitFirstOrNull()
-                                                                ?.values
-                                                                ?.let { it.firstOrNull() as? Number }
-                                                                ?.toInt() ?: 0
-
-                                val difference = (event.nuts.intOrNull ?: 0) - nutsAtTimeOfRecording
-                                if (difference <= 0) return@nuts
-
-                                nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                    .bind("$1", difference)
-                                    .bind("$2", event.id)
-                                    .bind("$3", THE_GAME_BAND)
-                                    .bind("$4", time)
-                                    .await()
-
-
-                            }
-                        }
+                        return@outer
                     }
                 }
             }
