@@ -44,10 +44,8 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
 import java.util.concurrent.Executor
 import java.util.concurrent.TimeUnit
-import java.util.function.BiFunction
 import kotlin.Comparator
 import kotlin.coroutines.CoroutineContext
-import kotlin.coroutines.coroutineContext
 import kotlin.reflect.jvm.jvmName
 
 sealed class KorneaResponseResult : KorneaResult.Failure {
@@ -167,7 +165,8 @@ suspend fun HttpClient.eventually(
     day: Int?,
     phase: Int?,
     category: Int?,
-    player: UUID? = null
+    provider: UUID? = null,
+    source: UUID? = null
 ): KorneaResult<List<UpNutEvent>> {
     val missingAmount = limit - nuts.size
     val remainingList = if (missingAmount > 0) upnut.globalEventsBefore(time, missingAmount, nuts.keys) {
@@ -188,16 +187,17 @@ suspend fun HttpClient.eventually(
         val list: MutableList<UpNutEvent> = ArrayList(limit)
 
         val upnuts =
-            player?.let { upnut.isUpnutted(feedIDs, time, it) } ?: emptyMap()
+            provider?.let { upnut.isUpnutted(feedIDs, time, it, source) } ?: emptyMap()
 
 //        nuts.entries.mapNotNullTo(list) { (feedID, nuts) -> map[feedID]?.copy(nuts = JsonPrimitive(nuts)) }
 //        remainingList.mapNotNullTo(list) { uuid -> map[uuid]?.copy(nuts = JsonPrimitive(0)) }
 
         feedIDs.mapNotNull { feedID ->
             val event = map[feedID] ?: return@mapNotNull null
+            val upnutted = upnuts[event.id]
 
             val metadata: JsonElement =
-                if (upnuts[feedID] == true) {
+                if (upnutted?.first == true || upnutted?.second == true) {
                     when (val metadata = event.metadata) {
                         is JsonObject -> JsonObject(metadata + Pair("upnut", JsonPrimitive(true)))
                         is JsonNull -> JsonObject(mapOf("upnut" to JsonPrimitive(true)))

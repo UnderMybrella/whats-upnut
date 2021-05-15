@@ -9,13 +9,8 @@ import dev.brella.kornea.errors.common.map
 import dev.brella.ktornea.common.KorneaHttpResult
 import dev.brella.ktornea.common.getAsResult
 import dev.brella.ktornea.common.installGranularHttp
-import io.jsonwebtoken.Jwt
 import io.jsonwebtoken.JwtParser
-import io.jsonwebtoken.JwtParserBuilder
 import io.jsonwebtoken.Jwts
-import io.jsonwebtoken.SignatureAlgorithm
-import io.jsonwebtoken.impl.crypto.RsaProvider
-import io.jsonwebtoken.security.Keys
 import io.ktor.application.*
 import io.ktor.client.*
 import io.ktor.client.engine.okhttp.*
@@ -36,10 +31,8 @@ import io.ktor.util.*
 import io.ktor.util.pipeline.*
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.future.await
-import kotlinx.coroutines.future.future
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.reactive.awaitFirstOrNull
-import kotlinx.coroutines.reactive.awaitSingleOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
@@ -58,7 +51,6 @@ import org.springframework.r2dbc.core.bind as bindNullable
 import java.io.File
 import java.nio.ByteBuffer
 import java.security.KeyFactory
-import java.security.spec.PKCS8EncodedKeySpec
 import java.security.spec.X509EncodedKeySpec
 import java.time.Clock
 import java.time.Instant
@@ -213,7 +205,8 @@ class WhatsUpNut {
             val phase = parameters["phase"]?.toIntOrNull()
             val category = parameters["category"]?.toIntOrNull()
 
-            val player = parameters["player"]?.uuidOrNull()
+            val provider = parameters["provider"]?.uuidOrNull()
+            val source = (parameters["player"] ?: parameters["player"])?.uuidOrNull()
 
             val limit = (parameters["limit"]?.toIntOrNull() ?: call.request.header("X-UpNut-Limit")?.toIntOrNull())?.coerceIn(1, 50) ?: 50
 
@@ -233,7 +226,7 @@ class WhatsUpNut {
                     }
                 }?.toMap(LinkedHashMap()) ?: emptyMap()
 
-            http.eventually(nuts, upnut, time, limit, season, tournament, type, day, phase, category, player)
+            http.eventually(nuts, upnut, time, limit, season, tournament, type, day, phase, category, provider, source)
         }.respond(call)
     }
 
@@ -291,7 +284,8 @@ class WhatsUpNut {
             val phase = parameters["phase"]?.toIntOrNull()
             val category = parameters["category"]?.toIntOrNull()
 
-            val player = parameters["player"]?.uuidOrNull()
+            val provider = parameters["provider"]?.uuidOrNull()
+            val source = (parameters["player"] ?: parameters["player"])?.uuidOrNull()
 
             val limit = (parameters["limit"]?.toIntOrNull() ?: call.request.header("X-UpNut-Limit")?.toIntOrNull())?.coerceIn(1, 50) ?: 50
 
@@ -311,7 +305,7 @@ class WhatsUpNut {
                     }
                 }?.toMap(LinkedHashMap()) ?: emptyMap()
 
-            http.eventually(nuts, upnut, time, limit, season, tournament, type, day, phase, category, player)
+            http.eventually(nuts, upnut, time, limit, season, tournament, type, day, phase, category, provider, source)
         }.respond(call)
     }
 
@@ -440,7 +434,7 @@ class WhatsUpNut {
 
                 eventsCache.getAsync(cacheKey, scope = this) {
                     val provider = (parameters["provider"] ?: call.request.header("X-UpNut-Provider"))?.uuidOrNull()
-                    val player = (parameters["source"] ?: parameters["player"] ?: call.request.header("X-UpNut-Source") ?: call.request.header("X-UpNut-Player"))?.uuidOrNull()
+                    val source = (parameters["source"] ?: parameters["player"] ?: call.request.header("X-UpNut-Source") ?: call.request.header("X-UpNut-Player"))?.uuidOrNull()
 
 
                     val time = parameters["time"]?.let { time ->
@@ -476,7 +470,7 @@ class WhatsUpNut {
                         val map = upnut.eventually(feedEventSources, time, noneOfProviders, noneOfSources, oneOfProviders, oneOfSources) ?: emptyMap()
 
                         val upnuts =
-                            provider?.let { upnut.isUpnutted(feedEventSources, time, it, player) } ?: emptyMap()
+                            provider?.let { upnut.isUpnutted(feedEventSources, time, it, source) } ?: emptyMap()
 
                         list.map inner@{ event ->
                             val upnutted = upnuts[event.id]
