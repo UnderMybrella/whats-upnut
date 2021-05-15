@@ -32,6 +32,7 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.int
 import kotlinx.serialization.json.intOrNull
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
@@ -624,8 +625,8 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
 
         suspend inline fun logging(time: Long, event: UpNutEvent, logger: Logger, atTimeOfRecording: Pair<Int, Int>?) {
             if (atTimeOfRecording == null) return
-            if (atTimeOfRecording.first > 0) logger.info("{} +{} nuts", event.id, atTimeOfRecording.first)
-            if (atTimeOfRecording.second > 0) logger.info("{} +{} scales", event.id, atTimeOfRecording.second)
+            if (event.nuts.intOrNull ?: 0 > atTimeOfRecording.first) logger.info("{} +{} nuts", event.id, atTimeOfRecording.first)
+            if (event.scales.intOrNull ?: 0 > atTimeOfRecording.second) logger.info("{} +{} scales", event.id, atTimeOfRecording.second)
         }
 
         inline fun build(): suspend (time: Long, event: UpNutEvent) -> Unit = run {
