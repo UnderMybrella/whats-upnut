@@ -317,6 +317,7 @@ class WhatsUpNut {
 
     @Serializable
     data class LibraryBook(val bookTitle: String?, val chapters: List<LibraryChapter>)
+
     @Serializable
     data class LibraryChapter(val feedID: String, val chapterTitle: String, val chapterTitleRedacted: String?, val isRedacted: Boolean)
 
@@ -328,12 +329,12 @@ class WhatsUpNut {
                         Pair(row["book_title"] as? String, LibraryChapter(uuid.toString(), row["chapter_title"] as? String ?: row["chapter_title"].toString(), row["chapter_title_redacted"] as? String, row["redacted"] as? Boolean ?: true))
                     }
                 }.all()
-                    .collectList()
-                    .awaitFirstOrNull()
-                    ?.filterNotNull()
-                    ?.groupBy(Pair<String?, LibraryChapter>::first, Pair<String?, LibraryChapter>::second)
-                    ?.map { (name, chapters) -> LibraryBook(name, chapters) }
-                ?: emptyList()
+                                .collectList()
+                                .awaitFirstOrNull()
+                                ?.filterNotNull()
+                                ?.groupBy(Pair<String?, LibraryChapter>::first, Pair<String?, LibraryChapter>::second)
+                                ?.map { (name, chapters) -> LibraryBook(name, chapters) }
+                            ?: emptyList()
 
                 call.respond(books)
             }
@@ -438,7 +439,10 @@ class WhatsUpNut {
                 val cacheKey = parameters.toStableString()
 
                 eventsCache.getAsync(cacheKey, scope = this) {
-                    val player = (parameters["player"] ?: call.request.header("X-UpNut-Player"))?.uuidOrNull()
+                    val provider = (parameters["provider"] ?: call.request.header("X-UpNut-Provider"))?.uuidOrNull()
+                    val player = (parameters["source"] ?: parameters["player"] ?: call.request.header("X-UpNut-Source") ?: call.request.header("X-UpNut-Player"))?.uuidOrNull()
+
+
                     val time = parameters["time"]?.let { time ->
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
                     } ?: call.request.header("X-UpNut-Time")?.let { time ->
@@ -472,7 +476,7 @@ class WhatsUpNut {
                         val map = upnut.eventually(feedEventSources, time, noneOfProviders, noneOfSources, oneOfProviders, oneOfSources) ?: emptyMap()
 
                         val upnuts =
-                            player?.let { upnut.isUpnutted(feedEventSources, time, it) } ?: emptyMap()
+                            provider?.let { upnut.isUpnutted(feedEventSources, time, it, player) } ?: emptyMap()
 
                         list.map inner@{ event ->
                             val upnutted = upnuts[event.id]
@@ -682,7 +686,7 @@ class WhatsUpNut {
 
                 get("/team") {
                     val parameters = call.request.queryParameters
-                    
+
                     val id = parameters["id"] ?: return@get call.respondJsonObject(HttpStatusCode.BadRequest) { put("error", "No ID provided") }
                     val category = parameters["category"]?.toIntOrNull()
                     val limit = parameters["limit"]?.toIntOrNull() ?: 100
@@ -769,7 +773,7 @@ class WhatsUpNut {
 
                 get("/player") {
                     val parameters = call.request.queryParameters
-                    
+
                     val id = parameters["id"] ?: return@get call.respondJsonObject(HttpStatusCode.BadRequest) { put("error", "No ID provided") }
                     val category = parameters["category"]?.toIntOrNull()
                     val limit = parameters["limit"]?.toIntOrNull() ?: 100

@@ -1002,7 +1002,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
         val logger = LoggerFactory.getLogger("dev.brella.blasement.upnut.ingest.Resend")
 
         val limit = getIntInScope("resend", "limit", 100)
-        val loopEvery = getIntInScope("resend", "loop_duration_s", 60)
+        val loopEvery = getIntInScope("resend", "loop_duration_s", 60 * 30)
         val delay = getLongInScope("resend", "delay_ms", 100)
         val delayOnFailure = getLongInScope("resend", "delay_on_failure_ms", 100)
         val totalLimit = getLongInScope("resend", "total_limit", Long.MAX_VALUE)

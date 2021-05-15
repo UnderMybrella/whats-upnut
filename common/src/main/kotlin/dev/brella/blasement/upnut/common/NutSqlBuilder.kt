@@ -13,6 +13,7 @@ import dev.brella.blasement.upnut.common.UpNutClient.Companion.ONE_OF_SOURCES_VA
 import dev.brella.blasement.upnut.common.UpNutClient.Companion.PHASE_VAR
 import dev.brella.blasement.upnut.common.UpNutClient.Companion.PLAYER_VAR
 import dev.brella.blasement.upnut.common.UpNutClient.Companion.SEASON_VAR
+import dev.brella.blasement.upnut.common.UpNutClient.Companion.SINGLE_PROVIDER_VAR
 import dev.brella.blasement.upnut.common.UpNutClient.Companion.SINGLE_SOURCE_VAR
 import dev.brella.blasement.upnut.common.UpNutClient.Companion.TEAM_VAR
 import dev.brella.blasement.upnut.common.UpNutClient.Companion.TIME_VAR
@@ -28,7 +29,8 @@ class NutSqlBuilder(val statement: DatabaseClient.GenericExecuteSpec, val mappin
 
     inline fun time(long: Long) = _bind(TIME_VAR, long)
     inline fun limit(limit: Int) = _bind(LIMIT_VAR, limit)
-    inline fun source(uuid: UUID) = _bind(SINGLE_SOURCE_VAR, uuid)
+    inline fun provider(uuid: UUID) = _bind(SINGLE_PROVIDER_VAR, uuid)
+    inline fun source(uuid: UUID?) = _bind(SINGLE_SOURCE_VAR, uuid)
 
     inline fun oneOfSources(list: List<UUID>?) = _bind(ONE_OF_SOURCES_VAR, list?.toTypedArray())
     inline fun noneOfSources(list: List<UUID>?) = _bind(NONE_OF_SOURCES_VAR, list?.toTypedArray())

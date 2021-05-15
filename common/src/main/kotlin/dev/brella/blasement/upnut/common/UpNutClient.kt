@@ -20,6 +20,7 @@ class UpNutClient(config: JsonObject) {
     companion object {
         const val TIME_VAR = ":time:"
         const val LIMIT_VAR = ":limit:"
+        const val SINGLE_PROVIDER_VAR = ":provider:"
         const val SINGLE_SOURCE_VAR = ":source:"
         const val ONE_OF_SOURCES_VAR = ":one_of_sources:"
         const val NONE_OF_SOURCES_VAR = ":none_of_sources:"
@@ -47,7 +48,8 @@ class UpNutClient(config: JsonObject) {
         const val TEAM_FILTER = "feed_id IN (SELECT feed_id FROM team_nuts WHERE team_id = $TEAM_VAR)"
         const val GAME_FILTER = "feed_id IN (SELECT feed_id FROM game_nuts WHERE game_id = $GAME_VAR)"
         const val PLAYER_FILTER = "feed_id IN (SELECT feed_id FROM player_nuts WHERE player_id = $PLAYER_VAR)"
-        const val SINGLE_SOURCE_FILTER = "source = $SINGLE_SOURCE_VAR"
+        const val SINGLE_SOURCE_FILTER = "source IS NOT DISTINCT FROM $SINGLE_SOURCE_VAR"
+        const val SINGLE_PROVIDER_FILTER = "provider = $SINGLE_PROVIDER_VAR"
 
         const val ONE_OF_SOURCES_FILTER = "($ONE_OF_SOURCES_VAR IS NULL OR source = ANY($ONE_OF_SOURCES_VAR))"
         const val NONE_OF_SOURCES_FILTER = "($NONE_OF_SOURCES_VAR IS NULL OR source != ALL($NONE_OF_SOURCES_VAR))"
@@ -125,7 +127,7 @@ class UpNutClient(config: JsonObject) {
             NutSqlStatement("SELECT feed_id, SUM(nuts) as nuts, SUM(scales) as scales FROM upnuts WHERE $IN_FEED_ID_FILTER AND $TIME_FILTER AND $NONE_OF_SOURCES_FILTER GROUP BY feed_id")
 
         val IS_UPNUT_FOR_SOURCE =
-            NutSqlStatement("SELECT feed_id, SUM(nuts) as nuts, SUM(scales) as scales FROM upnuts WHERE $IN_FEED_ID_FILTER AND $TIME_FILTER AND $SINGLE_SOURCE_FILTER GROUP BY feed_id")
+            NutSqlStatement("SELECT feed_id, SUM(nuts) as nuts, SUM(scales) as scales FROM upnuts WHERE $IN_FEED_ID_FILTER AND $TIME_FILTER AND $SINGLE_PROVIDER_FILTER AND $SINGLE_SOURCE_FILTER GROUP BY feed_id")
 
         //        @Language("PostgreSQL")
         inline fun getEventIDs(vararg where: String) =
@@ -321,10 +323,11 @@ class UpNutClient(config: JsonObject) {
             ?.filterNotNull()
             ?.toMap()
 
-    suspend fun isUpnutted(feedIDs: Iterable<UUID>, time: Long, source: UUID) =
+    suspend fun isUpnutted(feedIDs: Iterable<UUID>, time: Long, provider: UUID, source: UUID?) =
         IS_UPNUT_FOR_SOURCE(client)
             .feedIDs(feedIDs)
             .time(time)
+            .provider(provider)
             .source(source)
             .map { row ->
                 (row["feed_id"] as? UUID)?.let { feedID ->
