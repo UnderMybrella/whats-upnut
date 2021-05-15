@@ -239,18 +239,10 @@ class UpNutClient(config: JsonObject) {
             .noneOfSources(noneOfSources)
             .oneOfProviders(oneOfProviders)
             .oneOfSources(oneOfSources)
-            .map { row ->
-                (row["feed_id"] as? UUID)?.let { feedID ->
-                    (row["nuts"] as? Number)?.toInt()?.let { nuts ->
-                        (row["scales"] as? Number)?.toInt()?.let { scales ->
-                            Pair(feedID, Pair(nuts, scales))
-                        }
-                    }
-                }
-            }.all()
+            .map { row -> Pair(row.getValue<UUID>("feed_id"), Pair(row.get<Int?>("nuts"), row.get<Int?>("scales"))) }
+            .all()
             .collectList()
             .awaitSingleOrNull()
-            ?.filterNotNull()
             ?.toMap()
 
     suspend fun eventuallyNutsList(
@@ -268,17 +260,14 @@ class UpNutClient(config: JsonObject) {
             .oneOfProviders(oneOfProviders)
             .oneOfSources(oneOfSources)
             .map { row ->
-                (row["feed_id"] as? UUID)?.let { feedID ->
-                    (row["provider"] as? UUID)?.let { provider ->
-                        (row["nuts"] as? Number)?.toInt()?.let { nuts ->
-                            (row["scales"] as? Number)?.toInt()?.let { scales ->
-                                (row["time"] as? Number)?.toLong()?.let { time ->
-                                    feedID to NutsEpoch(nuts, scales, provider, row["source"] as? UUID, time)
-                                }
-                            }
-                        }
-                    }
-                }
+                row.getValue<UUID>("feed_id") to
+                        NutsEpoch(
+                            row.get<Int?>("nuts"),
+                            row.get<Int?>("scales"),
+                            row.getValue<UUID>("provider"),
+                            row.get<UUID>("source"),
+                            row.getValue<Long>("time")
+                        )
             }.all()
             .collectList()
             .awaitSingleOrNull()
@@ -290,18 +279,10 @@ class UpNutClient(config: JsonObject) {
             .feedIDs(feedIDs)
             .time(time)
             .oneOfSources(sources)
-            .map { row ->
-                (row["feed_id"] as? UUID)?.let { feedID ->
-                    (row["nuts"] as? Number)?.toInt()?.let { nuts ->
-                        (row["scales"] as? Number)?.toInt()?.let { scales ->
-                            Pair(feedID, Pair(nuts, scales))
-                        }
-                    }
-                }
-            }.all()
+            .map { row -> Pair(row.getValue<UUID>("feed_id"), Pair(row.get<Int?>("nuts"), row.get<Int?>("scales"))) }
+            .all()
             .collectList()
             .awaitSingleOrNull()
-            ?.filterNotNull()
             ?.toMap()
 
     suspend fun eventuallyWithoutSources(feedIDs: Iterable<UUID>, time: Long, sources: List<UUID>) =
@@ -309,18 +290,10 @@ class UpNutClient(config: JsonObject) {
             .feedIDs(feedIDs)
             .time(time)
             .oneOfSources(sources)
-            .map { row ->
-                (row["feed_id"] as? UUID)?.let { feedID ->
-                    (row["nuts"] as? Number)?.toInt()?.let { nuts ->
-                        (row["scales"] as? Number)?.toInt()?.let { scales ->
-                            Pair(feedID, Pair(nuts, scales))
-                        }
-                    }
-                }
-            }.all()
+            .map { row -> Pair(row.getValue<UUID>("feed_id"), Pair(row.get<Int?>("nuts"), row.get<Int?>("scales"))) }
+            .all()
             .collectList()
             .awaitSingleOrNull()
-            ?.filterNotNull()
             ?.toMap()
 
     suspend fun isUpnutted(feedIDs: Iterable<UUID>, time: Long, provider: UUID, source: UUID?) =
@@ -329,15 +302,8 @@ class UpNutClient(config: JsonObject) {
             .time(time)
             .provider(provider)
             .source(source)
-            .map { row ->
-                (row["feed_id"] as? UUID)?.let { feedID ->
-                    (row["nuts"] as? Number)?.toInt()?.let { nuts ->
-                        (row["scales"] as? Number)?.toInt()?.let { scales ->
-                            Pair(feedID, Pair(nuts > 0, scales > 0))
-                        }
-                    }
-                }
-            }.all()
+            .map { row -> Pair(row.getValue<UUID>("feed_id"), Pair(row.get<Int?>("nuts")?.let { it > 0 }, row.get<Int?>("scales")?.let { it > 0 })) }
+            .all()
             .collectList()
             .awaitSingleOrNull()
             ?.filterNotNull()
@@ -350,9 +316,8 @@ class UpNutClient(config: JsonObject) {
             .limit(limit)
             .feedIDs(feedIDs)
             .addMetadata()
-            .fetch()
+            .map { row -> row.getValue<UUID>("feed_id") }
             .all()
-            .mapNotNull { map -> map["feed_id"] as? UUID }
             .collectList()
             .awaitSingleOrNull()
 

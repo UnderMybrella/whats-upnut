@@ -72,24 +72,24 @@ data class NutDateTimeEvent(
 
 @Serializable
 data class NutsEpoch(
-    val nuts: Int,
-    val scales: Int,
+    val nuts: Int?,
+    val scales: Int?,
     val provider: @Serializable(UUIDSerialiser::class) UUID,
     val source: @Serializable(UUIDSerialiser::class) UUID?,
     val time: Long
 ) {
-    constructor(nuts: Number, scales: Number, provider: UUID, source: UUID?, time: Number) : this(nuts.toInt(), scales.toInt(), provider, source, time.toLong())
+    constructor(nuts: Number?, scales: Number?, provider: UUID, source: UUID?, time: Number) : this(nuts?.toInt(), scales?.toInt(), provider, source, time.toLong())
 }
 
 @Serializable
 data class NutsDateTime(
-    val nuts: Int,
-    val scales: Int,
+    val nuts: Int?,
+    val scales: Int?,
     val provider: @Serializable(UUIDSerialiser::class) UUID,
     val source: @Serializable(UUIDSerialiser::class) UUID?,
     val time: String
 ) {
-    constructor(nuts: Number, scales: Number, provider: UUID, source: UUID?, time: String) : this(nuts.toInt(), scales.toInt(), provider, source, time)
+    constructor(nuts: Number?, scales: Number?, provider: UUID, source: UUID?, time: String) : this(nuts?.toInt(), scales?.toInt(), provider, source, time)
 }
 
 object UUIDSerialiser : KSerializer<UUID> {
