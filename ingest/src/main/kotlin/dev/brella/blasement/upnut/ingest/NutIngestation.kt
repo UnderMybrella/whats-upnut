@@ -600,9 +600,9 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                     .bind("$4", time)
                     .await()
 
-                val missing = atTimeOfRecording!!.first - NUTS_THRESHOLD
+                val missing = NUTS_THRESHOLD - atTimeOfRecording!!.first
 
-                if (missing <= 0 && nutsDifference > missing) postEvent(WebhookEvent.ThresholdPassedNuts(NUTS_THRESHOLD, time, event), WebhookEvent.THRESHOLD_PASSED_NUTS)
+                if (missing in 1 until nutsDifference) postEvent(WebhookEvent.ThresholdPassedNuts(NUTS_THRESHOLD, time, event), WebhookEvent.THRESHOLD_PASSED_NUTS)
             }
 
             val scalesDifference = event.scales.intOrNull - atTimeOfRecording?.second
@@ -615,9 +615,9 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                     .await()
 
                 //We don't know the threshold for scales (or even how they work); making an educated guess
-                val missing = atTimeOfRecording!!.second - SCALES_THRESHOLD
+                val missing = SCALES_THRESHOLD - atTimeOfRecording!!.second
 
-                if (missing <= 0 && scalesDifference > missing) postEvent(WebhookEvent.ThresholdPassedScales(SCALES_THRESHOLD, time, event), WebhookEvent.THRESHOLD_PASSED_SCALES)
+                if (missing in 1 until scalesDifference) postEvent(WebhookEvent.ThresholdPassedScales(SCALES_THRESHOLD, time, event), WebhookEvent.THRESHOLD_PASSED_SCALES)
             }
 
             return atTimeOfRecording
@@ -625,8 +625,11 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
 
         suspend inline fun logging(time: Long, event: UpNutEvent, logger: Logger, atTimeOfRecording: Pair<Int, Int>?) {
             if (atTimeOfRecording == null) return
-            if (event.nuts.intOrNull ?: 0 > atTimeOfRecording.first) logger.info("{} +{} nuts", event.id, atTimeOfRecording.first)
-            if (event.scales.intOrNull ?: 0 > atTimeOfRecording.second) logger.info("{} +{} scales", event.id, atTimeOfRecording.second)
+            val nutsDifference = event.nuts.intOrNull - atTimeOfRecording.first
+            if (nutsDifference != null && nutsDifference > 0) logger.info("{} +{} nuts", event.id, nutsDifference)
+
+            val scalesDifference = event.scales.intOrNull - atTimeOfRecording.second
+            if (scalesDifference != null && scalesDifference > 0) logger.info("{} +{} scales", event.id, scalesDifference)
         }
 
         inline fun build(): suspend (time: Long, event: UpNutEvent) -> Unit = run {
