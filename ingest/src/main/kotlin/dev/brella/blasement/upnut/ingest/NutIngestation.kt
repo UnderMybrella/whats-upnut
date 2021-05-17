@@ -89,7 +89,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
         nuts.client.sql("CREATE TABLE IF NOT EXISTS snow_crystals (snow_id BIGINT NOT NULL PRIMARY KEY, uuid UUID NOT NULL);")
             .await()
 
-        nuts.client.sql("CREATE TABLE IF NOT EXISTS library (id UUID NOT NULL PRIMARY KEY, chapter_title_redacted VARCHAR(128), book_title VARCHAR(128) NOT NULL, chapter_title VARCHAR(128) NOT NULL, redacted BOOLEAN NOT NULL DEFAULT TRUE);")
+        nuts.client.sql("CREATE TABLE IF NOT EXISTS library (id UUID NOT NULL PRIMARY KEY, chapter_title_redacted VARCHAR(128), book_title VARCHAR(128) NOT NULL, chapter_title VARCHAR(128) NOT NULL, index_in_book INT NOT NULL, redacted BOOLEAN NOT NULL DEFAULT TRUE);")
             .await()
 
         nuts.client.sql("CREATE TABLE IF NOT EXISTS webhooks (id BIGSERIAL PRIMARY KEY, url VARCHAR(256) NOT NULL, subscribed_to BIGINT NOT NULL, secret_key bytea NOT NULL)")
@@ -408,18 +408,19 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                         val chaptersLocked: MutableList<WebhookEvent.LibraryChapter> = ArrayList()
 
                         books.forEach { (bookName, chapters) ->
-                            chapters.forEach { (chapterUUID, chapterDetails) ->
+                            chapters.entries.forEachIndexed { index, (chapterUUID, chapterDetails) ->
                                 val existing = booksReturned[chapterUUID]
                                 if (existing == null) {
                                     //New book just dropped
 
                                     logger.info("New book just dropped: {} / {}", bookName, chapterDetails.first)
 
-                                    nuts.client.sql("INSERT INTO library (id, book_title, chapter_title, redacted) VALUES ($1, $2, $3, $4)")
+                                    nuts.client.sql("INSERT INTO library (id, book_title, chapter_title, redacted, index_in_book) VALUES ($1, $2, $3, $4, $5)")
                                         .bind("$1", chapterUUID)
                                         .bind("$2", bookName)
                                         .bind("$3", chapterDetails.first)
                                         .bind("$4", chapterDetails.second)
+                                        .bind("$5", index)
                                         .await()
 
                                     val chapter = WebhookEvent.LibraryChapter(bookName, chapterUUID, chapterDetails.first, null, chapterDetails.second)
@@ -432,10 +433,12 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
 
                                     logger.info("Book has shifted redactivity: {} -> {}, {} -> {}", existing.first, chapterDetails.first, existing.second, chapterDetails.second)
 
-                                    nuts.client.sql("UPDATE library SET chapter_title = $1, chapter_title_redacted = $2, redacted = $3")
+                                    nuts.client.sql("UPDATE library SET chapter_title = $1, chapter_title_redacted = $2, redacted = $3, index_in_book WHERE id = $5")
                                         .bind("$1", chapterDetails.first)
                                         .bind("$2", existing.first)
                                         .bind("$3", chapterDetails.second)
+                                        .bind("$4", index)
+                                        .bind("$5", chapterUUID)
                                         .await()
 
                                     val chapter = WebhookEvent.LibraryChapter(bookName, chapterUUID, chapterDetails.first, existing.first, chapterDetails.second)
@@ -585,11 +588,11 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
 
         suspend inline fun insert(time: Long, event: UpNutEvent): Pair<Int, Int>? {
             val atTimeOfRecording = nuts.client.sql("SELECT SUM(nuts) AS nuts, SUM(scales) as scales FROM upnuts WHERE feed_id = $1 AND time <= $2 AND provider = '7fcb63bc-11f2-40b9-b465-f1d458692a63'::uuid AND source IS NULL")
-                                            .bind("$1", event.id)
-                                            .bind("$2", time)
-                                            .map { row -> (row.get<Int>("nuts") ?: 0) to (row.get<Int>("scales") ?: 0) }
-                                            .first()
-                                            .awaitFirstOrNull()
+                .bind("$1", event.id)
+                .bind("$2", time)
+                .map { row -> (row.get<Int>("nuts") ?: 0) to (row.get<Int>("scales") ?: 0) }
+                .first()
+                .awaitFirstOrNull()
 
             val nutsDifference = event.nuts.intOrNull - atTimeOfRecording?.first
             if (nutsDifference != null && nutsDifference > 0) {

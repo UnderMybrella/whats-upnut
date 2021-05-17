@@ -313,21 +313,31 @@ class WhatsUpNut {
     data class LibraryBook(val bookTitle: String?, val chapters: List<LibraryChapter>)
 
     @Serializable
-    data class LibraryChapter(val feedID: String, val chapterTitle: String, val chapterTitleRedacted: String?, val isRedacted: Boolean)
+    data class LibraryChapter(val feedID: String, val chapterTitle: String, val chapterTitleRedacted: String?, val indexInBook: Int, val isRedacted: Boolean)
 
     fun routing(routing: Routing) =
         with(routing) {
             get("/library") {
-                val books = upnut.client.sql("SELECT id, chapter_title_redacted, chapter_title, book_title, redacted FROM library").map { row ->
+                val books = upnut.client.sql("SELECT id, chapter_title_redacted, chapter_title, book_title, index_in_book, redacted FROM library").map { row ->
                     (row["id"] as? UUID)?.let { uuid ->
-                        Pair(row["book_title"] as? String, LibraryChapter(uuid.toString(), row["chapter_title"] as? String ?: row["chapter_title"].toString(), row["chapter_title_redacted"] as? String, row["redacted"] as? Boolean ?: true))
+                        Pair(
+                            row["book_title"] as? String,
+                            LibraryChapter(
+                                uuid.toString(),
+                                row["chapter_title"] as? String ?: row["chapter_title"].toString(),
+                                row["chapter_title_redacted"] as? String,
+                                row.getValue("index_in_book"),
+                                row["redacted"] as? Boolean ?: true
+                            )
+                        )
                     }
-                }.all()
+                }
+                                .all()
                                 .collectList()
                                 .awaitFirstOrNull()
                                 ?.filterNotNull()
                                 ?.groupBy(Pair<String?, LibraryChapter>::first, Pair<String?, LibraryChapter>::second)
-                                ?.map { (name, chapters) -> LibraryBook(name, chapters) }
+                                ?.map { (name, chapters) -> LibraryBook(name, chapters.sortedBy(LibraryChapter::indexInBook)) }
                             ?: emptyList()
 
                 call.respond(books)
