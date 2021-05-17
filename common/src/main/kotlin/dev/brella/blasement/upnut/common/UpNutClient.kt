@@ -141,7 +141,7 @@ class UpNutClient(config: JsonObject) {
                         prefix = "WHERE ",
                         separator = " AND "
                     )
-                } GROUP BY feed_id ORDER BY time DESC, sum DESC LIMIT $LIMIT_VAR) as list ORDER BY list.nuts DESC, list.scales DESC, list.time DESC"
+                } GROUP BY feed_id ORDER BY time DESC, nuts DESC LIMIT $LIMIT_VAR) as list ORDER BY list.nuts DESC, list.scales DESC, list.time DESC"
             )
 
         inline fun hotPSQLWithTime(vararg and: String) =
