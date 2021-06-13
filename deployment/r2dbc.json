@@ -1,5 +1,5 @@
 {
-  "url": "r2dbc:pool:postgresql://localhost:5432/upnuts",
+  "url": "r2dbc:pool:postgresql://postgresql:5432/upnuts",
   "user": "upnuts",
   "password": "shells-and-scales"
 }
