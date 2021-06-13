@@ -11,7 +11,7 @@ plugins {
 }
 
 group = "dev.brella"
-version = "1.7.2"
+version = "1.7.3"
 
 repositories {
     mavenCentral()
@@ -96,7 +96,7 @@ tasks.create<com.bmuschko.gradle.docker.tasks.image.Dockerfile>("createDockerfil
     copyFile("r2dbc.json", "/app/r2dbc.json")
     copyFile("logback.xml", "/app/logback.xml")
     entryPoint("java")
-    defaultCommand("-jar", "/app/upnuts-ingest.jar", "-Dlogback.configurationFile=/app/logback.xml")
+    defaultCommand("-Dlogback.configurationFile=/app/logback.xml", "-Dupnut.ingest=/app/ingest.json", "-Dupnut.r2dbc=/app/r2dbc.json", "-jar", "/app/upnuts-ingest.jar")
 }
 
 tasks.create<Sync>("syncShadowJarArchive") {

@@ -61,8 +61,17 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
 
         @JvmStatic
         fun main(args: Array<String>) {
-            val baseConfig: JsonObject = File("ingest.json").takeIf(File::exists)?.readText()?.let(Json::decodeFromString) ?: JsonObject(emptyMap())
-            val r2dbc = baseConfig.getJsonObjectOrNull("r2dbc") ?: File("r2dbc.json").takeIf(File::exists)?.readText()?.let(Json::decodeFromString) ?: JsonObject(emptyMap())
+            val ingestFile = args.firstOrNull { str -> str.startsWith("-ingest=") }
+                                 ?.substringAfter('=')
+                             ?: System.getProperty("upnut.ingest")
+                             ?: "ingest.json"
+            val r2dbcFile = args.firstOrNull { str -> str.startsWith("-r2dbc=") }
+                                ?.substringAfter('=')
+                            ?: System.getProperty("upnut.r2dbc")
+                            ?: "r2dbc.json"
+
+            val baseConfig: JsonObject = File(ingestFile).takeIf(File::exists)?.readText()?.let(Json::decodeFromString) ?: JsonObject(emptyMap())
+            val r2dbc = baseConfig.getJsonObjectOrNull("r2dbc") ?: File(r2dbcFile).takeIf(File::exists)?.readText()?.let(Json::decodeFromString) ?: JsonObject(emptyMap())
             val ingest = NutIngestation(baseConfig, UpNutClient(r2dbc))
 
             runBlocking { ingest.join() }
@@ -442,7 +451,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 val timeTaken = measureTime { processEvents(events) }
                                 ingestLogger.trace("Processed events in {}", timeTaken)
                             }
-                        
+
                         events
                             .groupBy(Pair<Long, List<UpNutEvent>>::first, Pair<Long, List<UpNutEvent>>::second)
                             .mapValues { (_, list) -> list.flatten().distinctBy(UpNutEvent::id) }
@@ -453,7 +462,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                     ingestLogger.warn("ERR: Backwards time travel; going from {} to {} ??", lastTime, time)
                                     return@forEach
                                 }
-                                
+
                                 val newEvents = events.filter { event ->
                                     val before = existing[event.id] ?: return@filter true
 
@@ -473,7 +482,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                 newEvents.forEach { event ->
                                     existing[event.id] = (event.nuts.longOrNull?.and(0xFFFFFFFF) ?: 0) or (event.scales.longOrNull?.shl(32) ?: 0)
                                 }
-                                
+
                                 lastTime = time
                             }
                     }

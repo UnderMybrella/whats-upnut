@@ -62,8 +62,8 @@ import kotlin.time.ExperimentalTime
 fun main(args: Array<String>) = io.ktor.server.netty.EngineMain.main(args)
 
 class WhatsUpNut {
-    val configJson: JsonObject? = File("upnut.json").takeIf(File::exists)?.readText()?.let(Json::decodeFromString)
-    val upnut = UpNutClient(configJson?.getJsonObjectOrNull("r2dbc") ?: File("r2dbc.json").readText().let(Json::decodeFromString))
+    val configJson: JsonObject? = File(System.getProperty("upnut.query") ?: "upnut.json").takeIf(File::exists)?.readText()?.let(Json::decodeFromString)
+    val upnut = UpNutClient(configJson?.getJsonObjectOrNull("r2dbc") ?: File(System.getProperty("upnut.r2dbc") ?: "r2dbc.json").readText().let(Json::decodeFromString))
     val http = HttpClient(OkHttp) {
         installGranularHttp()
 
@@ -952,7 +952,7 @@ class WhatsUpNut {
 }
 
 @OptIn(ExperimentalTime::class, kotlin.ExperimentalStdlibApi::class)
-fun Application.module(testing: Boolean = false) {
+fun Application.module() {
     val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true

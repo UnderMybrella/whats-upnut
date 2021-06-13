@@ -11,7 +11,7 @@ plugins {
 }
 
 group = "dev.brella"
-version = "1.5.1"
+version = "1.5.2"
 
 repositories {
     mavenCentral()
@@ -104,11 +104,11 @@ tasks.create<com.bmuschko.gradle.docker.tasks.image.Dockerfile>("createDockerfil
     )
     copyFile(tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJar").get().archiveFileName.get(), "/app/upnuts-query.jar")
 
-   copyFile("r2dbc.json", "/app/r2dbc.json")
+    copyFile("r2dbc.json", "/app/r2dbc.json")
     copyFile("logback.xml", "/app/logback.xml")
     copyFile("application.conf", "/app/application.conf")
     entryPoint("java")
-    defaultCommand("-jar", "/app/upnuts-query.jar", "-config=/app/application.conf", "-Dlogback.configurationFile=/app/logback.xml")
+    defaultCommand("-Dlogback.configurationFile=/app/logback.xml", "-Dupnut.r2dbc=/app/r2dbc.json", "-jar", "/app/upnuts-query.jar", "-config=/app/application.conf")
 
     exposePort(9796)
 }
