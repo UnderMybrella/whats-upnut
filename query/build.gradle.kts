@@ -11,7 +11,7 @@ plugins {
 }
 
 group = "dev.brella"
-version = "1.5.0"
+version = "1.5.1"
 
 repositories {
     mavenCentral()
@@ -102,10 +102,9 @@ tasks.create<com.bmuschko.gradle.docker.tasks.image.Dockerfile>("createDockerfil
             "org.opencontainers.image.authors" to "UnderMybrella \"undermybrella@abimon.org\""
         )
     )
-    copyFile(tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJar").get().archiveFileName.get(), "/app/upnuts-ingest.jar")
+    copyFile(tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJar").get().archiveFileName.get(), "/app/upnuts-query.jar")
 
-    copyFile("ingest.json", "/app/ingest.json")
-    copyFile("r2dbc.json", "/app/r2dbc.json")
+   copyFile("r2dbc.json", "/app/r2dbc.json")
     copyFile("logback.xml", "/app/logback.xml")
     copyFile("application.conf", "/app/application.conf")
     entryPoint("java")
@@ -120,7 +119,6 @@ tasks.create<Sync>("syncShadowJarArchive") {
     dependsOn("assemble")
     from(
         tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJar").get().archiveFile.get().asFile,
-        File(rootProject.projectDir, "deployment/ingest.json"),
         File(rootProject.projectDir, "deployment/application.conf"),
         File(rootProject.projectDir, "deployment/r2dbc.json"),
         File(rootProject.projectDir, "deployment/logback.xml")
