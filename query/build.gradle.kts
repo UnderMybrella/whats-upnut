@@ -142,3 +142,8 @@ tasks.create<com.bmuschko.gradle.docker.tasks.image.DockerBuildImage>("buildImag
 
     images.addAll("undermybrella/upnuts-query:$version", "undermybrella/upnuts-query:latest")
 }
+
+tasks.create<com.bmuschko.gradle.docker.tasks.image.DockerPushImage>("pushImage") {
+    group = "docker"
+    dependsOn("buildImage")
+}
