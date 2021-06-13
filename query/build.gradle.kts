@@ -7,6 +7,7 @@ plugins {
 
     id("com.github.johnrengelman.shadow")
     id("io.spring.dependency-management")
+    id("com.bmuschko.docker-remote-api")
 }
 
 group = "dev.brella"
