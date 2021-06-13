@@ -2,7 +2,6 @@ version: '2'
 
 networks:
   upshell-river:
-    driver: bridge
 
 services:
   postgresql:
@@ -21,6 +20,8 @@ services:
       - upshell-river
   query:
     image: undermybrella/upnuts-query:latest
+    ports:
+      - '9796:9796'
     networks:
       - upshell-river
 
