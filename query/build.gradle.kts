@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "dev.brella"
-version = "1.4.5"
+version = "1.5.0"
 
 repositories {
     mavenCentral()
@@ -25,7 +25,7 @@ dependencyManagement {
 }
 
 dependencies {
-    val ktor_version = "1.5.3"
+    val ktor_version = "1.6.0"
 
     implementation(project(":common"))
 
@@ -45,16 +45,15 @@ dependencies {
 
     implementation("dev.brella:kornea-errors:2.0.3-alpha")
 
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.1.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.2.0")
 
     implementation("ch.qos.logback:logback-classic:1.2.3")
 
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.4.3")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactor:1.4.3")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.5.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactor:1.5.0")
 
     implementation("org.springframework.data:spring-data-r2dbc:1.3.0")
     implementation("io.r2dbc:r2dbc-postgresql:0.8.7.RELEASE")
-    implementation("io.r2dbc:r2dbc-h2:0.8.4.RELEASE")
     implementation("io.r2dbc:r2dbc-pool:0.9.0.M1")
 
     implementation("io.jsonwebtoken:jjwt-api:0.11.2")
@@ -89,4 +88,56 @@ tasks.withType<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar> {
         paths = listOf("META-INF/spring.factories")
         mergeStrategy = "append"
     }
+}
+
+
+tasks.create<com.bmuschko.gradle.docker.tasks.image.Dockerfile>("createDockerfile") {
+    group = "docker"
+
+    destFile.set(File(rootProject.buildDir, "docker/query/Dockerfile"))
+    from("azul/zulu-openjdk-alpine:11-jre")
+    label(
+        mapOf(
+            "org.opencontainers.image.authors" to "UnderMybrella \"undermybrella@abimon.org\""
+        )
+    )
+    copyFile(tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJar").get().archiveFileName.get(), "/app/upnuts-ingest.jar")
+
+    copyFile("ingest.json", "/app/ingest.json")
+    copyFile("r2dbc.json", "/app/r2dbc.json")
+    copyFile("logback.xml", "/app/logback.xml")
+    copyFile("application.conf", "/app/application.conf")
+    entryPoint("java")
+    defaultCommand("-jar", "/app/upnuts-query.jar", "-config=/app/application.conf", "-Dlogback.configurationFile=/app/logback.xml")
+
+    exposePort(9796)
+}
+
+tasks.create<Sync>("syncShadowJarArchive") {
+    group = "docker"
+
+    dependsOn("assemble")
+    from(
+        tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJar").get().archiveFile.get().asFile,
+        File(rootProject.projectDir, "deployment/ingest.json"),
+        File(rootProject.projectDir, "deployment/application.conf"),
+        File(rootProject.projectDir, "deployment/r2dbc.json"),
+        File(rootProject.projectDir, "deployment/logback.xml")
+    )
+    into(
+        tasks.named<com.bmuschko.gradle.docker.tasks.image.Dockerfile>("createDockerfile").get().destFile.get().asFile.parentFile
+    )
+}
+
+tasks.named("createDockerfile") {
+    dependsOn("syncShadowJarArchive")
+}
+
+tasks.create<com.bmuschko.gradle.docker.tasks.image.DockerBuildImage>("buildImage") {
+    group = "docker"
+
+    dependsOn("createDockerfile")
+    inputDir.set(tasks.named<com.bmuschko.gradle.docker.tasks.image.Dockerfile>("createDockerfile").get().destFile.get().asFile.parentFile)
+
+    images.addAll("undermybrella/upnuts-query:$version", "undermybrella/upnuts-query:latest")
 }

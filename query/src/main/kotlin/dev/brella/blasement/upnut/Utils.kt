@@ -176,7 +176,7 @@ suspend fun HttpClient.eventually(
             .day(day)
             .phase(phase)
             .category(category)
-    } else emptyList()
+    } ?: emptyList() else emptyList()
 
     val feedIDs = (nuts.keys.toList() + remainingList).filterNotNull()
 

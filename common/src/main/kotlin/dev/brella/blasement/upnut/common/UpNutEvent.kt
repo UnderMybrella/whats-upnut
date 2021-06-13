@@ -12,6 +12,7 @@ import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import java.util.*
 
@@ -30,9 +31,17 @@ data class UpNutEvent(
     val category: Int,
     val description: String,
     var nuts: JsonPrimitive = JsonNull,
-    var scales: JsonPrimitive = JsonNull,
-    val metadata: JsonElement
-)
+//    var scales: JsonPrimitive = JsonNull,
+    var metadata: JsonElement
+) {
+    var scales: JsonPrimitive
+        get() = (metadata as? JsonObject)?.get("scales") as? JsonPrimitive ?: JsonNull
+        set(value) {
+            metadata = (metadata as? JsonObject)?.let { json ->
+                JsonObject(json.plus("scales" to value))
+            } ?: metadata
+        }
+}
 
 @Serializable
 data class NutEpochEvent(

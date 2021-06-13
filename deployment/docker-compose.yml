@@ -1,0 +1,29 @@
+version: '2'
+
+networks:
+  upshell-river:
+    driver: bridge
+
+services:
+  postgresql:
+    image: bitnami/postgresql:13
+    volumes:
+      - 'postgresql_data:/bitnami/postgresql'
+    environment:
+      - POSTGRESQL_USERNAME=upnuts
+      - POSTGRESQL_PASSWORD=shells-and-scales
+      - POSTGRESQL_DATABASE=upnuts
+    networks:
+      - upshell-river
+  ingest:
+    image: undermybrella/upnuts-ingest:latest
+    networks:
+      - upshell-river
+  query:
+    image: undermybrella/upnuts-query:latest
+    networks:
+      - upshell-river
+
+volumes:
+  postgresql_data:
+    driver: local

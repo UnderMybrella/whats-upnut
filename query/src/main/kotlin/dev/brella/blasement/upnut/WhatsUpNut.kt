@@ -498,7 +498,9 @@ class WhatsUpNut {
                                 if (nuts != event.nuts.intOrNull)
                                     return@inner event.copy(nuts = JsonPrimitive(nuts), metadata = metadata)
                                 else if (scales != event.scales.intOrNull)
-                                    return@inner event.copy(scales = JsonPrimitive(scales), metadata = metadata)
+                                    return@inner event.copy(metadata = metadata).apply {
+                                        this.scales = JsonPrimitive(scales)
+                                    }
                             }
 
                             return@inner event.copy(metadata = metadata)

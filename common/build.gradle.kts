@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "dev.brella"
-version = "1.4.3"
+version = "1.5.0"
 
 repositories {
     mavenCentral()
@@ -27,10 +27,10 @@ dependencyManagement {
 dependencies {
     implementation("dev.brella:kornea-blaseball-base:2.2.9-alpha")
     implementation("dev.brella:kornea-errors:2.0.3-alpha")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.1.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.2.0")
 
 //    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.4.3")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactor:1.4.3")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactor:1.5.0")
 
     implementation("org.springframework.data:spring-data-r2dbc:1.3.0")
     implementation("io.r2dbc:r2dbc-postgresql:0.8.7.RELEASE")

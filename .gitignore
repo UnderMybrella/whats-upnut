@@ -78,3 +78,11 @@ application.conf
 .idea
 build
 gen/
+
+influx.json
+ingest.json
+private.key
+private.pem
+public.key
+public.pem
+r2dbc.json

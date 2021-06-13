@@ -1,0 +1,49 @@
+{
+  "default": {
+    "limit": 500,
+    "total_limit": 10000
+  },
+  "sources": [
+    {
+      "type": "global",
+      "name": "GlobalByTop",
+      "sort_by": "top"
+    },
+    {
+      "type": "global",
+      "name": "GlobalByHot",
+      "sort_by": "hot"
+    },
+    {
+      "type": "global",
+      "name": "GlobalByTopSpecial",
+      "sort_by": "top",
+      "category": "special"
+    },
+    {
+      "type": "global",
+      "name": "GlobalByHotSpecial",
+      "sort_by": "hot",
+      "category": "special"
+    },
+    {
+      "type": "global",
+      "name": "GlobalByTopBook",
+      "sort_by": "top",
+      "category": "book_feed"
+    },
+    {
+      "type": "global",
+      "name": "GlobalByHotBook",
+      "sort_by": "hot",
+      "category": "book_feed"
+    },
+    {
+      "type": "team",
+      "team": "all"
+    },
+    {
+      "type": "librarian"
+    }
+  ]
+}
