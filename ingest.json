@@ -1,0 +1,25 @@
+{
+  "default": {
+    "limit": 500,
+    "total_limit": 10000
+  },
+  "sources": [
+    {
+      "type": "global",
+      "name": "GlobalByTop",
+      "sort_by": "top"
+    },
+    {
+      "type": "global",
+      "name": "GlobalByHot",
+      "sort_by": "hot"
+    },
+    {
+      "type": "team",
+      "team": "all"
+    },
+    {
+      "type": "librarian"
+    }
+  ]
+}
