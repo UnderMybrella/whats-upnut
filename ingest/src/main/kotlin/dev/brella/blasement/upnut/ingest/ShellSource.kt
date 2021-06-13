@@ -40,15 +40,15 @@ public interface ShellSource {
 
             loopEvery(loopEvery, `while` = { isActive }) {
                 var start = 0
-                val now = now()
 
                 while (isActive && start < totalLimit) {
+                    val now = now()
                     val response = retrievePage(start, limit, now)
                     val existingTag = etags[start]
                     val responseTag = response.headers["Etag"]
                     if (existingTag != null && existingTag == responseTag) {
                         start += limit
-                        logger.info("Hit ETag; continuing at $start")
+                        logger.trace("Hit ETag; continuing at {}", start)
                     } else {
                         val list = response.responseToPageList()
                             .trimIf(sortingByHot == true)
@@ -181,7 +181,6 @@ public interface ShellSource {
             val shouldTrim = sortBy == BLASEBALL_SORTING_HOT || sortBy == BLASEBALL_SORTING_TOP
 
             loopEvery(loopEvery, `while` = { isActive }) {
-                val now = now()
 
                 val storyList = databaseClient.sql("SELECT id FROM library WHERE redacted = FALSE")
                     .map { row -> row.getValue<UUID>("id").toString() }
@@ -195,12 +194,14 @@ public interface ShellSource {
                     var start = 0
 
                     while (isActive && start < totalLimit) {
+                        val now = now()
+
                         val response = httpClient.getStoryFeedAsResponse(story, limit = limit, sort = sortBy, category = category, start = start)
                         val existingTag = etags[start]
                         val responseTag = response.headers["Etag"]
                         if (existingTag != null && existingTag == responseTag) {
                             start += limit
-                            logger.info("Hit ETag; continuing at $start")
+                            logger.trace("Hit ETag; continuing at {}", start)
                         } else {
                             val list = response.receive<List<UpNutEvent>>()
                                 .trimIf(shouldTrim)

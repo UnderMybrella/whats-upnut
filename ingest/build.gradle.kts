@@ -11,7 +11,7 @@ plugins {
 }
 
 group = "dev.brella"
-version = "1.6.4"
+version = "1.7.2"
 
 repositories {
     mavenCentral()
@@ -80,36 +80,43 @@ tasks.withType<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar> {
     }
 }
 
-
 tasks.create<com.bmuschko.gradle.docker.tasks.image.Dockerfile>("createDockerfile") {
     group = "docker"
 
-    destFile.set(File(rootProject.buildDir, "docker/Dockerfile"))
+    destFile.set(File(rootProject.buildDir, "docker/ingest/Dockerfile"))
     from("azul/zulu-openjdk-alpine:11-jre")
     label(
         mapOf(
             "org.opencontainers.image.authors" to "UnderMybrella \"undermybrella@abimon.org\""
         )
     )
-    copyFile(tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJar").get().archiveFileName.get(), "/app/cors-mechanics.jar")
-    copyFile("application.conf", "/app/application.conf")
+    copyFile(tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJar").get().archiveFileName.get(), "/app/upnuts-ingest.jar")
+
+    copyFile("ingest.json", "/app/ingest.json")
+    copyFile("r2dbc.json", "/app/r2dbc.json")
+    copyFile("logback.xml", "/app/logback.xml")
     entryPoint("java")
-    defaultCommand("-jar", "/app/cors-mechanics.jar", "-config=/app/application.conf")
-    exposePort(8786)
-    runCommand("apk --update --no-cache add curl")
-    instruction("HEALTHCHECK CMD curl -f http://localhost:8786/health || exit 1")
+    defaultCommand("-jar", "/app/upnuts-ingest.jar", "-Dlogback.configurationFile=/app/logback.xml")
 }
 
 tasks.create<Sync>("syncShadowJarArchive") {
     group = "docker"
 
     dependsOn("assemble")
-    from(tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJar").get().archiveFile.get().asFile, "application.conf")
-    into(tasks.named<com.bmuschko.gradle.docker.tasks.image.Dockerfile>("createDockerfile").get().destFile.get().asFile.parentFile)
+    from(
+        tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJar").get().archiveFile.get().asFile,
+        File(rootProject.projectDir, "deployment/ingest.json"),
+        File(rootProject.projectDir, "deployment/r2dbc.json"),
+        File(rootProject.projectDir, "deployment/logback.xml")
+    )
+
+    into(
+        tasks.named<com.bmuschko.gradle.docker.tasks.image.Dockerfile>("createDockerfile").get().destFile.get().asFile.parentFile
+    )
 }
 
 tasks.named("createDockerfile") {
-    dependsOn(":syncShadowJarArchive")
+    dependsOn("syncShadowJarArchive")
 }
 
 tasks.create<com.bmuschko.gradle.docker.tasks.image.DockerBuildImage>("buildImage") {
@@ -118,5 +125,5 @@ tasks.create<com.bmuschko.gradle.docker.tasks.image.DockerBuildImage>("buildImag
     dependsOn("createDockerfile")
     inputDir.set(tasks.named<com.bmuschko.gradle.docker.tasks.image.Dockerfile>("createDockerfile").get().destFile.get().asFile.parentFile)
 
-    images.addAll("undermybrella/cors-mechanics:$version", "undermybrella/cors-mechanics:latest")
+    images.addAll("undermybrella/upnuts-ingest:$version", "undermybrella/upnuts-ingest:latest")
 }

@@ -5,9 +5,7 @@ import com.soywiz.klock.DateTimeTz
 import dev.brella.blasement.upnut.common.*
 import dev.brella.kornea.blaseball.BlaseballApi
 import dev.brella.kornea.errors.common.KorneaResult
-import dev.brella.kornea.errors.common.doOnSuccess
 import dev.brella.kornea.errors.common.getOrElse
-import dev.brella.ktornea.common.getAsResult
 import dev.brella.ktornea.common.installGranularHttp
 import dev.brella.ktornea.common.postAsResult
 import io.ktor.client.*
@@ -29,8 +27,6 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.reactive.awaitFirstOrNull
-import kotlinx.coroutines.reactive.awaitLast
-import kotlinx.coroutines.reactor.mono
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -40,8 +36,6 @@ import kotlinx.serialization.json.longOrNull
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.r2dbc.core.await
-import reactor.core.publisher.Flux
-import reactor.core.publisher.Mono
 import java.io.File
 import java.nio.ByteBuffer
 import java.util.*
@@ -421,6 +415,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
 
     @OptIn(ObsoleteCoroutinesApi::class, ExperimentalTime::class)
     val actor = actor<Pair<Long, List<UpNutEvent>>> {
+        var lastTime: Long = now()
         val list: MutableList<Pair<Long, List<UpNutEvent>>> = ArrayList()
         var swapping = false
 
@@ -444,17 +439,21 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                         events.flatMap(Pair<Long, List<UpNutEvent>>::second)
                             .distinctBy(UpNutEvent::id)
                             .let { events ->
-                                println("Event Processing ${events.size}")
-
-                                println("Complete in ${measureTime { processEvents(events) }}")
+                                val timeTaken = measureTime { processEvents(events) }
+                                ingestLogger.trace("Processed events in {}", timeTaken)
                             }
+                        
                         events
                             .groupBy(Pair<Long, List<UpNutEvent>>::first, Pair<Long, List<UpNutEvent>>::second)
                             .mapValues { (_, list) -> list.flatten().distinctBy(UpNutEvent::id) }
                             .entries
                             .sortedBy(Map.Entry<Long, List<UpNutEvent>>::key)
                             .forEach { (time, events) ->
-                                println("Raw # of events: ${events.size}")
+                                if (time <= lastTime) {
+                                    ingestLogger.warn("ERR: Backwards time travel; going from {} to {} ??", lastTime, time)
+                                    return@forEach
+                                }
+                                
                                 val newEvents = events.filter { event ->
                                     val before = existing[event.id] ?: return@filter true
 
@@ -466,14 +465,16 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
 
                                     return@filter eventNuts > beforeNuts || eventScales > beforeScales
                                 }
-                                println("Preprocessed # of events: ${newEvents.size}")
 
                                 if (newEvents.isEmpty()) return@forEach
 
-                                println("Processing complete in ${measureTime { processNuts(time, newEvents) }}")
+                                val timeTaken = measureTime { processNuts(time, newEvents) }
+                                ingestLogger.trace("Processing complete in {}", timeTaken)
                                 newEvents.forEach { event ->
                                     existing[event.id] = (event.nuts.longOrNull?.and(0xFFFFFFFF) ?: 0) or (event.scales.longOrNull?.shl(32) ?: 0)
                                 }
+                                
+                                lastTime = time
                             }
                     }
                 }")
@@ -482,126 +483,6 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
     }
 
     val jobs = sources.map { shellSource -> launch { shellSource.processNuts(this, actor) } }
-
-//
-//    @OptIn(ExperimentalTime::class)
-//    val teamsByTopJob = launch {
-//        val logger = LoggerFactory.getLogger("dev.brella.blasement.upnut.ingest.TeamsByTop")
-//
-//        blaseballApi.getAllTeams()
-//            .getOrNull()
-//            ?.map { team ->
-//                launch {
-
-//                    loopEvery(loopEvery.seconds, `while` = { isActive }) {
-//                        var start = 0
-//                        val now = now()
-//
-//                        while (isActive && start < totalLimit) {
-//                            val list = getTeamFeed(team.id.id, limit = limit, sort = 2, start = start.toString())
-//                                           .doOnThrown { error ->
-//                                               logger.debug("Exception occurred when retrieving Team Feed (By Top, start = {0}, limit = {1}, team = {2})", start, limit, team.fullName, error.exception)
-//                                           }.doOnFailure { delay(delayOnFailure) }
-//                                           .getOrNull()?.takeWhile { event -> event.nuts.intOrNull ?: 0 > 0 || event.scales.intOrNull ?: 0 > 0 } ?: break
-//
-//                            list.forEach { event -> processNuts(now, event) }
-//
-//                            if (list.size < limit) break
-//                            start += list.size
-//
-//                            delay(delay)
-//                        }
-//                    }
-//                }
-//            }
-//            ?.joinAll()
-//    }
-//
-//    @OptIn(ExperimentalTime::class)
-//    val teamsByHotJob = launch {
-//        val logger = LoggerFactory.getLogger("dev.brella.blasement.upnut.ingest.GlobalByHot")
-//
-//        blaseballApi.getAllTeams()
-//            .getOrNull()
-//            ?.map { team ->
-//                launch {
-//
-//                    val limit = getIntInScope(listOf(team.nickname, "team_hot"), "limit", 100)
-//                    val loopEvery = getIntInScope(listOf(team.nickname, "team_hot"), "loop_duration_s", 60)
-//                    val delayOnFailure = getLongInScope(listOf(team.nickname, "team_hot"), "delay_on_failure_ms", 100)
-//
-//                    loopEvery(loopEvery.seconds, `while` = { isActive }) {
-//                        val now = now()
-//
-//                        val list = getTeamFeed(team.id.id, limit = limit, sort = 3)
-//                            .doOnThrown { error -> logger.debug("Exception occurred when retrieving Team Feed (By Hot, limit = {0}, team = {1})", limit, team.fullName, error.exception) }
-//                            .doOnFailure { delay(delayOnFailure) }
-//                            .getOrNull()?.takeWhile { event -> event.nuts.intOrNull ?: 0 > 0 || event.scales.intOrNull ?: 0 > 0 }
-//                            ?.reversed()
-//
-//                        list?.forEach { event -> processNuts(now, event) }
-//                    }
-//                }
-//            }
-//            ?.joinAll()
-//    }
-//
-//    @OptIn(ExperimentalTime::class)
-//    val storyByOldestJob = launch {
-//        val logger = LoggerFactory.getLogger("dev.brella.blasement.upnut.ingest.StoryByOldest")
-//
-//        val limit = getIntInScope("story_top", "limit", 100)
-//        val loopEvery = getIntInScope("story_top", "loop_duration_s", 60)
-//        val delay = getLongInScope("story_top", "delay_ms", 100)
-//        val delayOnFailure = getLongInScope("story_top", "delay_on_failure_ms", 100)
-//        val totalLimit = getLongInScope("story_top", "total_limit", Long.MAX_VALUE)
-//
-//        loopEvery(loopEvery.seconds, `while` = { isActive }) {
-////            getFeed(limit = limit, start = lastID?.let(BLASEBALL_TIME_PATTERN::format))
-//            var start = 0
-//            val now = now()
-//
-//            val storyList = nuts.client.sql("SELECT id, redacted FROM library").map { row ->
-//                (row["id"] as? UUID)?.let { uuid ->
-//                    if (row["redacted"] as? Boolean != false) return@map null
-//                    else uuid
-//                }
-//            }.all().collectList().awaitFirstOrNull()?.filterNotNull() ?: emptyList()
-//
-//            logger.debug("Logging chapters: {}", storyList)
-//
-//            storyList.map { chapterID ->
-//                launch {
-//                    while (isActive && start < totalLimit) {
-//                        val list = getStoryFeed(chapterID = chapterID.toString(), limit = limit, sort = 0, start = start.toString())
-//                                       .doOnThrown { error ->
-//                                           logger.debug(
-//                                               "Exception occurred when retrieving Story Feed (By Oldest, ID {0}, start = {1}, limit = {2})",
-//                                               chapterID,
-//                                               start,
-//                                               limit,
-//                                               error.exception
-//                                           )
-//                                       }.doOnFailure { delay(delayOnFailure) }
-//                                       .getOrNull() ?: break
-//
-//                        list.forEach { event -> processNuts(now, event) }
-//
-//                        if (list.size < limit) break
-//                        start += list.size
-//
-//                        delay(delay)
-//                    }
-//                }
-//            }.joinAll()
-//        }
-//    }
-
-    val STORY_LIST_REGEX =
-        "books\\s*:\\s*\\[\\s*(?:\\s*\\{\\s*title\\s*:\\s*\"[^\"]+\"\\s*,\\s*chapters\\s*:\\s*\\[(?:\\s*\\{\\s*title\\s*:\\s*\"[^\"]+\"\\s*,\\s*id\\s*:\\s*\"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\"\\s*(?:,\\s*redacted\\s*:\\s*(?:true|false)\\s*)?\\}\\s*,?)*\\s*\\]\\s*,?\\s*\\}\\s*,?\\s*)*".toRegex()
-    val BOOK_REGEX =
-        "\\{\\s*title\\s*:\\s*\"([^\"]+)\"\\s*,\\s*chapters\\s*:\\s*\\[((?:\\s*\\{\\s*title\\s*:\\s*\"[^\"]+\"\\s*,\\s*id\\s*:\\s*\"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\"\\s*(?:,\\s*redacted\\s*:\\s*(?:true|false)\\s*)?\\}\\s*,?)*)\\s*]".toRegex()
-    val CHAPTER_REGEX = "\\{\\s*title\\s*:\\s*\"([^\"]+)\"\\s*,\\s*id\\s*:\\s*\"([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\"\\s*(?:,\\s*redacted\\s*:\\s*(true|false)\\s*)?\\}".toRegex()
 
     @OptIn(ExperimentalTime::class)
     val librarian = launch {
