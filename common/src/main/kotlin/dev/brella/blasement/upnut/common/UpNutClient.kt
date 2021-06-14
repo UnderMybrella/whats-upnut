@@ -139,7 +139,7 @@ class UpNutClient(config: JsonObject) {
         //        @Language("PostgreSQL")
         inline fun hotPSQL(vararg where: String) =
             NutSqlStatement(
-                "SELECT list.feed_id, list.nuts, list.scales, list.time, floor(log(2, list.nuts) + (meta.created / 1000 / 604800)) as sort FROM (SELECT feed_id, SUM(nuts) AS nuts, SUM(scales) as scales, MAX(time) as time FROM upnuts ${
+                "SELECT list.feed_id, list.nuts, list.scales, list.time, floor(log(10, list.nuts) + (meta.created / 1000 / 604800)) as sort FROM (SELECT feed_id, SUM(nuts) AS nuts, SUM(scales) as scales, MAX(time) as time FROM upnuts ${
                     if (where.isEmpty()) "" else where.joinToString(
                         prefix = "WHERE ",
                         separator = " AND "
