@@ -807,7 +807,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
         suspend inline fun metadata(event: UpNutEvent) {
             nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
                 .bind("$1", event.id)
-                .bind("$2", event.created.utc.unixMillisLong)
+                .bind("$2", event.created.toEpochMilliseconds())
                 .bind("$3", event.season)
                 .bind("$4", event.tournament)
                 .bind("$5", event.type)
@@ -827,7 +827,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                     chunk.forEach { event ->
                         statement
                             .bind("$1", event.id)
-                            .bind("$2", event.created.utc.unixMillisLong)
+                            .bind("$2", event.created.toEpochMilliseconds())
                             .bind("$3", event.season)
                             .bind("$4", event.tournament)
                             .bind("$5", event.type)
