@@ -5,7 +5,10 @@ import io.r2dbc.spi.ConnectionFactories
 import io.r2dbc.spi.ConnectionFactory
 import io.r2dbc.spi.ConnectionFactoryOptions
 import io.r2dbc.spi.Option
+import kotlinx.coroutines.reactive.awaitFirst
+import kotlinx.coroutines.reactive.awaitFirstOrNull
 import kotlinx.coroutines.reactive.awaitSingleOrNull
+import kotlinx.coroutines.reactor.awaitSingleOrNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -136,12 +139,12 @@ class UpNutClient(config: JsonObject) {
         //        @Language("PostgreSQL")
         inline fun hotPSQL(vararg where: String) =
             NutSqlStatement(
-                "SELECT list.feed_id, list.nuts, list.scales, list.time FROM (SELECT feed_id, SUM(nuts) AS nuts, SUM(scales) as scales, MAX(time) as time FROM upnuts ${
+                "SELECT list.feed_id, list.nuts, list.scales, list.time, floor(log(2, list.nuts) + (meta.created / 1000 / 604800)) as sort FROM (SELECT feed_id, SUM(nuts) AS nuts, SUM(scales) as scales, MAX(time) as time FROM upnuts ${
                     if (where.isEmpty()) "" else where.joinToString(
                         prefix = "WHERE ",
                         separator = " AND "
                     )
-                } GROUP BY feed_id ORDER BY time DESC, nuts DESC LIMIT $LIMIT_VAR) as list ORDER BY list.nuts DESC, list.scales DESC, list.time DESC"
+                } GROUP BY feed_id) as list JOIN (SELECT feed_id, created FROM event_metadata) as meta ON list.feed_id = meta.feed_id ORDER BY sort DESC, list.nuts DESC, list.scales DESC, list.time DESC LIMIT $LIMIT_VAR"
             )
 
         inline fun hotPSQLWithTime(vararg and: String) =
@@ -163,7 +166,7 @@ class UpNutClient(config: JsonObject) {
                         prefix = "WHERE ",
                         separator = " AND "
                     )
-                } GROUP BY feed_id ORDER BY nuts DESC LIMIT $LIMIT_VAR"
+                } GROUP BY feed_id ORDER BY nuts DESC, scales DESC LIMIT $LIMIT_VAR"
             )
 
         inline fun topPSQLWithTime(vararg and: String) =
@@ -342,7 +345,7 @@ class UpNutClient(config: JsonObject) {
             .fetch()
             .all()
             .collectList()
-            .awaitSingleOrNull()
+            .awaitFirstOrNull()
 
     suspend fun globalHotInSources(time: Long, limit: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
         GLOBAL_HOT_SOURCES(client)

@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "dev.brella"
-version = "1.5.0"
+version = "1.5.1"
 
 repositories {
     mavenCentral()
@@ -28,6 +28,7 @@ dependencies {
     implementation("dev.brella:kornea-blaseball-base:2.2.9-alpha")
     implementation("dev.brella:kornea-errors:2.0.3-alpha")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.2.0")
+    api("org.jetbrains.kotlinx:kotlinx-datetime:0.2.1")
 
 //    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.4.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactor:1.5.0")

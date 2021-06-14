@@ -220,9 +220,7 @@ class WhatsUpNut {
                         .category(category)
                 }?.mapNotNull { map ->
                     (map["feed_id"] as? UUID)?.let { feedID ->
-                        (map["sum"] as? Number)?.let { sum ->
-                            Pair(feedID, sum.toInt())
-                        }
+                        Pair(feedID, Pair((map["nuts"] as? Number)?.toInt() ?: 0, (map["scales"] as? Number)?.toInt() ?: 0))
                     }
                 }?.toMap(LinkedHashMap()) ?: emptyMap()
 
@@ -299,9 +297,7 @@ class WhatsUpNut {
                         .category(category)
                 }?.mapNotNull { map ->
                     (map["feed_id"] as? UUID)?.let { feedID ->
-                        (map["sum"] as? Number)?.let { sum ->
-                            Pair(feedID, sum.toInt())
-                        }
+                        Pair(feedID, Pair((map["nuts"] as? Number)?.toInt() ?: 0, (map["scales"] as? Number)?.toInt() ?: 0))
                     }
                 }?.toMap(LinkedHashMap()) ?: emptyMap()
 
@@ -473,7 +469,7 @@ class WhatsUpNut {
                         ?.split(',')
                         ?.mapNotNull(String::uuidOrNull)
 
-                    http.getAsResult<List<UpNutEvent>>("https://api.sibr.dev/eventually/events") {
+                    http.getAsResult<List<UpNutEvent>>("https://api.sibr.dev/eventually/v2/events") {
                         url.parameters.appendAll(parameters)
                     }.map { list ->
                         val feedEventSources = list.map(UpNutEvent::id)
@@ -544,7 +540,7 @@ class WhatsUpNut {
                     val formatAsDateTime = (parameters["time_format"] ?: call.request.header("X-UpNut-TimeFormat")) ==
                             "datetime"
 
-                    http.getAsResult<List<UpNutEvent>>("https://api.sibr.dev/eventually/events") {
+                    http.getAsResult<List<UpNutEvent>>("https://api.sibr.dev/eventually/v2/events") {
                         url.parameters.appendAll(parameters)
                     }.map { list ->
                         val map = upnut.eventuallyNutsList(list.map(UpNutEvent::id), time, noneOfProviders, noneOfSources, oneOfProviders, oneOfSources) ?: emptyMap()

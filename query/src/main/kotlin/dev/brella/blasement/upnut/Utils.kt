@@ -155,7 +155,7 @@ suspend fun <K, V> AsyncCache<K, V>.getAsyncResult(key: K, scope: CoroutineScope
     }.await()
 
 suspend fun HttpClient.eventually(
-    nuts: Map<UUID, Int>,
+    nuts: Map<UUID, Pair<Int, Int>>,
     upnut: UpNutClient,
     time: Long,
     limit: Int,
@@ -180,11 +180,10 @@ suspend fun HttpClient.eventually(
 
     val feedIDs = (nuts.keys.toList() + remainingList).filterNotNull()
 
-    return getAsResult<List<UpNutEvent>>("https://api.sibr.dev/eventually/events") {
-        parameter("ids", feedIDs.joinToString(","))
+    return getAsResult<List<UpNutEvent>>("https://api.sibr.dev/eventually/v2/events") {
+        parameter("id", feedIDs.joinToString("_or_"))
     }.map { list ->
         val map = list.associateBy(UpNutEvent::id)
-        val list: MutableList<UpNutEvent> = ArrayList(limit)
 
         val upnuts =
             provider?.let { upnut.isUpnutted(feedIDs, time, it, source) } ?: emptyMap()
@@ -205,7 +204,17 @@ suspend fun HttpClient.eventually(
                     }
                 } else event.metadata
 
-            event.copy(nuts = JsonPrimitive(nuts[feedID] ?: 0), metadata = metadata)
+            val nutPair = nuts[feedID]
+
+            event.copy(nuts = JsonPrimitive(nutPair?.first ?: 0), metadata = metadata).apply {
+                if (scales == JsonNull) {
+                    if (nutPair != null && nutPair.second > 0) {
+                        scales = JsonPrimitive(nutPair.second)
+                    }
+                } else {
+                    scales = JsonPrimitive(nutPair?.second ?: 0)
+                }
+            }
         }
     }
 }

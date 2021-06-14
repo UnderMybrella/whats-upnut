@@ -2,6 +2,7 @@ package dev.brella.blasement.upnut.common
 
 import com.soywiz.klock.DateTimeTz
 import dev.brella.kornea.blaseball.base.common.json.BlaseballDateTimeSerialiser
+import kotlinx.datetime.Instant
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
@@ -22,7 +23,7 @@ data class UpNutEvent(
     val playerTags: @Serializable(UUIDListSerialiser::class) List<@Serializable(UUIDSerialiser::class) UUID>?,
     val teamTags: @Serializable(UUIDListSerialiser::class) List<@Serializable(UUIDSerialiser::class) UUID>?,
     val gameTags: @Serializable(UUIDListSerialiser::class) List<@Serializable(UUIDSerialiser::class) UUID>?,
-    val created: @Serializable(BlaseballDateTimeSerialiser::class) DateTimeTz,
+    val created: Instant,
     val season: Int,
     val tournament: Int,
     val type: Int,
@@ -49,7 +50,7 @@ data class NutEpochEvent(
     val playerTags: @Serializable(UUIDListSerialiser::class) List<@Serializable(UUIDSerialiser::class) UUID>?,
     val teamTags: @Serializable(UUIDListSerialiser::class) List<@Serializable(UUIDSerialiser::class) UUID>?,
     val gameTags: @Serializable(UUIDListSerialiser::class) List<@Serializable(UUIDSerialiser::class) UUID>?,
-    val created: @Serializable(BlaseballDateTimeSerialiser::class) DateTimeTz,
+    val created: Instant,
     val season: Int,
     val tournament: Int,
     val type: Int,
@@ -67,7 +68,7 @@ data class NutDateTimeEvent(
     val playerTags: @Serializable(UUIDListSerialiser::class) List<@Serializable(UUIDSerialiser::class) UUID>?,
     val teamTags: @Serializable(UUIDListSerialiser::class) List<@Serializable(UUIDSerialiser::class) UUID>?,
     val gameTags: @Serializable(UUIDListSerialiser::class) List<@Serializable(UUIDSerialiser::class) UUID>?,
-    val created: @Serializable(BlaseballDateTimeSerialiser::class) DateTimeTz,
+    val created: Instant,
     val season: Int,
     val tournament: Int,
     val type: Int,
