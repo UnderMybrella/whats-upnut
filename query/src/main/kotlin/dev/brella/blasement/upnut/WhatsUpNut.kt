@@ -365,7 +365,21 @@ class WhatsUpNut {
 
                 get("/complete") {
                     call.respond(
-                        upnut.client.sql("SELECT feed_id, data FROM metadata_collection WHERE data IS NOT NULL")
+                        upnut.client.sql("SELECT feed_id, data FROM metadata_collection WHERE data IS NOT NULL AND cleared = false")
+                            .map { row ->
+                                row.getValue<UUID>("feed_id").toString() to
+                                        Json.parseToJsonElement(row.getValue("data"))
+                            }
+                            .all()
+                            .collectMap(Pair<String, JsonElement>::first, Pair<String, JsonElement>::second)
+                            .awaitFirstOrNull()
+                        ?: emptyMap()
+                    )
+                }
+
+                get("/collected") {
+                    call.respond(
+                        upnut.client.sql("SELECT feed_id, data FROM metadata_collection WHERE data IS NOT NULL AND cleared = true")
                             .map { row ->
                                 row.getValue<UUID>("feed_id").toString() to
                                         Json.parseToJsonElement(row.getValue("data"))

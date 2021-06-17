@@ -99,7 +99,10 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
         nuts.client.sql("CREATE TABLE IF NOT EXISTS event_log (id BIGSERIAL PRIMARY KEY, type INT NOT NULL, data json NOT NULL, created BIGINT NOT NULL, processed BOOLEAN NOT NULL DEFAULT FALSE);")
             .await()
 
-        nuts.client.sql("CREATE TABLE IF NOT EXISTS metadata_collection (feed_id UUID not null PRIMARY KEY, data json);")
+        nuts.client.sql("CREATE TABLE IF NOT EXISTS metadata_collection (feed_id UUID not null PRIMARY KEY, data json, cleared BOOLEAN NOT NULL DEFAULT FALSE);")
+            .await()
+
+        nuts.client.sql("ALTER TABLE metadata_collection ADD COLUMN cleared BOOLEAN NOT NULL DEFAULT FALSE")
             .await()
 
         nuts.client.sql("CREATE INDEX IF NOT EXISTS snow_index_uuid ON snow_crystals (uuid);")
@@ -501,9 +504,9 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                             .distinctBy(UpNutEvent::id)
                             .let { events ->
                                 val timeTaken = measureTime {
-                                    processEvents(events) 
+                                    processEvents(events)
                                 }
-                                
+
                                 sendToFinally(events)
                                 ingestLogger.trace("Processed events in {}", timeTaken)
                             }
@@ -650,6 +653,42 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                 }
             } catch (th: Throwable) {
                 th.printStackTrace()
+            }
+        }
+    }
+
+    @OptIn(ExperimentalTime::class)
+    val finallyResolution = launch {
+        val logger = LoggerFactory.getLogger("dev.brella.blasement.upnut.FinallyResolution")
+
+        initJob.join()
+
+        loopEvery(60.seconds * 5, { isActive }) {
+            val collected = nuts.client.sql("SELECT feed_id FROM metadata_collection WHERE data IS NOT NULL AND cleared = FALSE")
+                                .map { row -> row.getValue<UUID>("feed_id").toString() }
+                                .all()
+                                .collectList()
+                                .awaitFirstOrNull()
+                            ?: emptyList()
+
+            logger.debug("Following up on ${collected.size} events")
+            collected.chunked(100).forEach { chunk ->
+                try {
+                    val ids = http.get<List<UpNutEvent>>("https://api.sibr.dev/eventually/v2/events") {
+                        parameter("id", chunk.joinToString("_or_") { it.toString() })
+                        parameter("limit", chunk.size)
+                    }.let { Array(it.size) { i -> it[i].id } }
+
+                    if (ids.isNotEmpty()) {
+                        nuts.client.sql("UPDATE metadata_collection SET cleared = TRUE WHERE feed_id = ANY($1)")
+                            .bind("$1", ids)
+                            .await()
+
+                        logger.info("Cleared ${ids.size} events")
+                    }
+                } catch (th: Throwable) {
+                    logger.error("Error caught when trying to query eventually", th)
+                }
             }
         }
     }
