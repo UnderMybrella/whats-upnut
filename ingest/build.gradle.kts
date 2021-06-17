@@ -11,7 +11,7 @@ plugins {
 }
 
 group = "dev.brella"
-version = "1.8.2"
+version = "1.9.0"
 
 repositories {
     mavenCentral()
@@ -93,10 +93,11 @@ tasks.create<com.bmuschko.gradle.docker.tasks.image.Dockerfile>("createDockerfil
     copyFile(tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJar").get().archiveFileName.get(), "/app/upnuts-ingest.jar")
 
     copyFile("ingest.json", "/app/ingest.json")
-    copyFile("r2dbc.json", "/app/r2dbc.json")
+    copyFile("upnuts-r2dbc.json", "/app/upnuts-r2dbc.json")
+    copyFile("eventually-r2dbc.json", "/app/eventually-r2dbc.json")
     copyFile("logback.xml", "/app/logback.xml")
     entryPoint("java")
-    defaultCommand("-Dlogback.configurationFile=/app/logback.xml", "-Dupnut.ingest=/app/ingest.json", "-Dupnut.r2dbc=/app/r2dbc.json", "-jar", "/app/upnuts-ingest.jar")
+    defaultCommand("-Dlogback.configurationFile=/app/logback.xml", "-Dupnut.ingest=/app/ingest.json", "-Dupnut.r2dbc=/app/upnuts-r2dbc.json", "-Dupnut.eventually=/app/eventually-r2dbc.json", "-jar", "/app/upnuts-ingest.jar")
 }
 
 tasks.create<Sync>("syncShadowJarArchive") {
@@ -106,7 +107,8 @@ tasks.create<Sync>("syncShadowJarArchive") {
     from(
         tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJar").get().archiveFile.get().asFile,
         File(rootProject.projectDir, "deployment/ingest.json"),
-        File(rootProject.projectDir, "deployment/r2dbc.json"),
+        File(rootProject.projectDir, "deployment/upnuts-r2dbc.json"),
+        File(rootProject.projectDir, "deployment/eventually-r2dbc.json"),
         File(rootProject.projectDir, "deployment/logback.xml")
     )
 

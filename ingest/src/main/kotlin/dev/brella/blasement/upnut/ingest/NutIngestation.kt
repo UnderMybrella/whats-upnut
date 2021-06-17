@@ -43,7 +43,7 @@ import kotlin.time.measureTimedValue
 import kotlin.time.milliseconds
 import kotlin.time.seconds
 
-class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineScope {
+class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventuallie: Eventuallie) : CoroutineScope {
     companion object {
         val THE_GAME_BAND = UUID.fromString("7fcb63bc-11f2-40b9-b465-f1d458692a63")
 
@@ -59,11 +59,17 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
             val r2dbcFile = args.firstOrNull { str -> str.startsWith("-r2dbc=") }
                                 ?.substringAfter('=')
                             ?: System.getProperty("upnut.r2dbc")
-                            ?: "r2dbc.json"
+                            ?: "upnuts-r2dbc.json"
+
+            val eventuallyR2dbcFile = args.firstOrNull { str -> str.startsWith("-eventually=") }
+                                          ?.substringAfter('=')
+                                      ?: System.getProperty("upnut.eventually")
+                                      ?: "eventually-r2dbc.json"
 
             val baseConfig: JsonObject = File(ingestFile).takeIf(File::exists)?.readText()?.let(Json::decodeFromString) ?: JsonObject(emptyMap())
-            val r2dbc = baseConfig.getJsonObjectOrNull("r2dbc") ?: File(r2dbcFile).takeIf(File::exists)?.readText()?.let(Json::decodeFromString) ?: JsonObject(emptyMap())
-            val ingest = NutIngestation(baseConfig, UpNutClient(r2dbc))
+            val upnutsR2dbc = baseConfig.getJsonObjectOrNull("upnuts_r2dbc") ?: File(r2dbcFile).takeIf(File::exists)?.readText()?.let(Json::decodeFromString) ?: JsonObject(emptyMap())
+            val eventuallyR2dbc = baseConfig.getJsonObjectOrNull("eventually_r2dbc") ?: File(eventuallyR2dbcFile).takeIf(File::exists)?.readText()?.let(Json::decodeFromString) ?: JsonObject(emptyMap())
+            val ingest = NutIngestation(baseConfig, UpNutClient(upnutsR2dbc), Eventuallie(eventuallyR2dbc))
 
             runBlocking { ingest.join() }
         }
@@ -102,8 +108,8 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
         nuts.client.sql("CREATE TABLE IF NOT EXISTS metadata_collection (feed_id UUID not null PRIMARY KEY, data json, cleared BOOLEAN NOT NULL DEFAULT FALSE);")
             .await()
 
-        nuts.client.sql("ALTER TABLE metadata_collection ADD COLUMN cleared BOOLEAN NOT NULL DEFAULT FALSE")
-            .await()
+//        nuts.client.sql("ALTER TABLE metadata_collection ADD COLUMN cleared BOOLEAN NOT NULL DEFAULT FALSE")
+//            .await()
 
         nuts.client.sql("CREATE INDEX IF NOT EXISTS snow_index_uuid ON snow_crystals (uuid);")
             .await()
@@ -446,10 +452,11 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                     var missingInsertCount = 0
 
                     try {
-                        http.get<List<UpNutEvent>>("https://api.sibr.dev/eventually/v2/events") {
-                            parameter("id", chunk.joinToString("_or_") { it.id.toString() })
-                            parameter("limit", chunk.size)
-                        }.mapTo(present, UpNutEvent::id)
+//                        http.get<List<UpNutEvent>>("https://api.sibr.dev/eventually/v2/events") {
+//                            parameter("id", chunk.joinToString("_or_") { it.id.toString() })
+//                            parameter("limit", chunk.size)
+//                        }.mapTo(present, UpNutEvent::id)
+                        present.addAll(eventuallie.feedIDsPresent(chunk))
                     } catch (th: Throwable) {
                         logger.error("Error caught when trying to query eventually", th)
                     }
@@ -665,7 +672,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
 
         loopEvery(60.seconds * 5, { isActive }) {
             val collected = nuts.client.sql("SELECT feed_id FROM metadata_collection WHERE data IS NOT NULL AND cleared = FALSE")
-                                .map { row -> row.getValue<UUID>("feed_id").toString() }
+                                .map { row -> row.getValue<UUID>("feed_id") }
                                 .all()
                                 .collectList()
                                 .awaitFirstOrNull()
@@ -674,14 +681,15 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
             logger.debug("Following up on ${collected.size} events")
             collected.chunked(100).forEach { chunk ->
                 try {
-                    val ids = http.get<List<UpNutEvent>>("https://api.sibr.dev/eventually/v2/events") {
-                        parameter("id", chunk.joinToString("_or_") { it.toString() })
-                        parameter("limit", chunk.size)
-                    }.let { Array(it.size) { i -> it[i].id } }
+                    val ids = eventuallie.feedIDsPresent(chunk.toTypedArray())
+//                        http.get<List<UpNutEvent>>("https://api.sibr.dev/eventually/v2/events") {
+//                            parameter("id", chunk.joinToString("_or_") { it.toString() })
+//                            parameter("limit", chunk.size)
+//                        }.let { Array(it.size) { i -> it[i].id } }
 
                     if (ids.isNotEmpty()) {
                         nuts.client.sql("UPDATE metadata_collection SET cleared = TRUE WHERE feed_id = ANY($1)")
-                            .bind("$1", ids)
+                            .bind("$1", ids.toTypedArray())
                             .await()
 
                         logger.info("Cleared ${ids.size} events")

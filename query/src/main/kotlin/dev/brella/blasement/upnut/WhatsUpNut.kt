@@ -5,6 +5,7 @@ import com.soywiz.klock.DateTime
 import com.soywiz.klock.format
 import dev.brella.blasement.upnut.common.*
 import dev.brella.kornea.blaseball.base.common.BLASEBALL_TIME_PATTERN
+import dev.brella.kornea.errors.common.KorneaResult
 import dev.brella.kornea.errors.common.map
 import dev.brella.ktornea.common.KorneaHttpResult
 import dev.brella.ktornea.common.getAsResult
@@ -71,7 +72,9 @@ class WhatsUpNut {
     }
 
     val configJson: JsonObject? = File(System.getProperty("upnut.query") ?: "upnut.json").takeIf(File::exists)?.readText()?.let(Json::decodeFromString)
-    val upnut = UpNutClient(configJson?.getJsonObjectOrNull("r2dbc") ?: File(System.getProperty("upnut.r2dbc") ?: "r2dbc.json").readText().let(Json::decodeFromString))
+    val upnut = UpNutClient(configJson?.getJsonObjectOrNull("upnuts_r2dbc") ?: File(System.getProperty("upnut.r2dbc") ?: "r2dbc.json").readText().let(Json::decodeFromString))
+    val eventuallie = Eventuallie(configJson?.getJsonObjectOrNull("eventually_r2dbc") ?: File(System.getProperty("upnut.r2dbc") ?: "r2dbc.json").readText().let(Json::decodeFromString))
+
     val http = HttpClient(OkHttp) {
         installGranularHttp()
 
@@ -235,7 +238,11 @@ class WhatsUpNut {
                     }
                 }?.toMap(LinkedHashMap()) ?: emptyMap()
 
-            http.eventually(nuts, upnut, logger, time, limit, offset, season, tournament, type, day, phase, category, provider, source)
+            try {
+                KorneaResult.success(eventuallie.mergeFeedWithNuts(nuts, upnut, logger, time, limit, offset, season, tournament, type, day, phase, category, provider, source))
+            } catch (th: Throwable) {
+                KorneaResult.thrown(th)
+            }
         }.respond(call)
     }
 
@@ -313,7 +320,11 @@ class WhatsUpNut {
                     }
                 }?.toMap(LinkedHashMap()) ?: emptyMap()
 
-            http.eventually(nuts, upnut, logger, time, limit, offset, season, tournament, type, day, phase, category, provider, source)
+            try {
+                KorneaResult.success(eventuallie.mergeFeedWithNuts(nuts, upnut, logger, time, limit, offset, season, tournament, type, day, phase, category, provider, source))
+            } catch (th: Throwable) {
+                KorneaResult.thrown(th)
+            }
         }.respond(call)
     }
 
@@ -363,31 +374,25 @@ class WhatsUpNut {
                     )
                 }
 
-                get("/complete") {
+                get("/ingested") {
                     call.respond(
-                        upnut.client.sql("SELECT feed_id, data FROM metadata_collection WHERE data IS NOT NULL AND cleared = false")
-                            .map { row ->
-                                row.getValue<UUID>("feed_id").toString() to
-                                        Json.parseToJsonElement(row.getValue("data"))
-                            }
+                        upnut.client.sql("SELECT data FROM metadata_collection WHERE data IS NOT NULL AND cleared = false")
+                            .map { row -> Json.parseToJsonElement(row.getValue("data")) }
                             .all()
-                            .collectMap(Pair<String, JsonElement>::first, Pair<String, JsonElement>::second)
+                            .collectList()
                             .awaitFirstOrNull()
-                        ?: emptyMap()
+                        ?: emptyList()
                     )
                 }
 
-                get("/collected") {
+                get("/cleared") {
                     call.respond(
-                        upnut.client.sql("SELECT feed_id, data FROM metadata_collection WHERE data IS NOT NULL AND cleared = true")
-                            .map { row ->
-                                row.getValue<UUID>("feed_id").toString() to
-                                        Json.parseToJsonElement(row.getValue("data"))
-                            }
+                        upnut.client.sql("SELECT data FROM metadata_collection WHERE data IS NOT NULL AND cleared = true")
+                            .map { row -> Json.parseToJsonElement(row.getValue("data")) }
                             .all()
-                            .collectMap(Pair<String, JsonElement>::first, Pair<String, JsonElement>::second)
+                            .collectList()
                             .awaitFirstOrNull()
-                        ?: emptyMap()
+                        ?: emptyList()
                     )
                 }
             }
