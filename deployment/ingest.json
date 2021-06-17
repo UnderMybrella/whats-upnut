@@ -1,7 +1,7 @@
 {
   "default": {
     "limit": 500,
-    "total_limit": 10000
+    "total_limit": 50000
   },
   "sources": [
     {
@@ -36,6 +36,23 @@
       "type": "global",
       "name": "GlobalByHotBook",
       "sort_by": "hot",
+      "category": "book_feed"
+    },
+    {
+      "type": "global",
+      "name": "GlobalByNew",
+      "sort_by": "newest"
+    },
+    {
+      "type": "global",
+      "name": "GlobalByNewSpecial",
+      "sort_by": "newest",
+      "category": "special"
+    },
+    {
+      "type": "global",
+      "name": "GlobalByNewBook",
+      "sort_by": "newest",
       "category": "book_feed"
     },
     {

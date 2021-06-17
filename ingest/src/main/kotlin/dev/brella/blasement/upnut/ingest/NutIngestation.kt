@@ -1,13 +1,9 @@
 package dev.brella.blasement.upnut.ingest
 
-import com.soywiz.klock.DateTime
-import com.soywiz.klock.DateTimeTz
 import dev.brella.blasement.upnut.common.*
 import dev.brella.kornea.blaseball.BlaseballApi
-import dev.brella.kornea.errors.common.KorneaResult
 import dev.brella.kornea.errors.common.getOrElse
 import dev.brella.ktornea.common.installGranularHttp
-import dev.brella.ktornea.common.postAsResult
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.engine.okhttp.*
@@ -20,8 +16,8 @@ import io.ktor.client.statement.*
 import io.ktor.content.*
 import io.ktor.http.*
 import io.ktor.util.*
-import io.r2dbc.spi.Row
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.channels.actor
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
@@ -37,20 +33,15 @@ import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.r2dbc.core.await
 import java.io.File
-import java.nio.ByteBuffer
 import java.util.*
-import javax.crypto.Mac
-import javax.crypto.spec.SecretKeySpec
 import kotlin.collections.HashMap
+import kotlin.collections.HashSet
 import kotlin.coroutines.CoroutineContext
 import kotlin.time.ExperimentalTime
 import kotlin.time.measureTime
 import kotlin.time.measureTimedValue
 import kotlin.time.milliseconds
 import kotlin.time.seconds
-
-import org.springframework.r2dbc.core.bind as bindNullable
-import io.r2dbc.postgresql.codec.Json as R2Json
 
 class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineScope {
     companion object {
@@ -422,6 +413,67 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
         ingestLogger.info("Reading from the following sources: {}", this)
     }
 
+    @OptIn(ExperimentalTime::class, kotlinx.coroutines.ObsoleteCoroutinesApi::class)
+    val finallyActor: SendChannel<List<UpNutEvent>> = actor<List<UpNutEvent>> {
+        val set: MutableSet<UpNutEvent> = HashSet()
+        val present: MutableSet<UUID> = HashSet()
+        var swapping = false
+
+        val logger = LoggerFactory.getLogger("dev.brella.blasement.upnut.Finally")
+
+        val receiveJob = receiveAsFlow().onEach { while (swapping) yield(); set.addAll(it) }.launchIn(this)
+
+        initJob.join()
+
+        loopEvery(60.seconds, { isActive }) {
+            swapping = true
+            val events = set.toTypedArray().filter { it.id !in present }
+            set.clear()
+            swapping = false
+
+            logger.debug("Checking ${events.size} events")
+
+            if (events.isEmpty()) return@loopEvery
+
+            nuts.client.inConnectionAwait { connection ->
+                events.chunked(100).forEach { chunk ->
+                    val statement =
+                        connection.createStatement("INSERT INTO metadata_collection (feed_id, data) VALUES ( \$1, \$2 ) ON CONFLICT (feed_id) DO UPDATE SET data = $2")
+
+                    var missingInsertCount = 0
+
+                    try {
+                        http.get<List<UpNutEvent>>("https://api.sibr.dev/eventually/v2/events") {
+                            parameter("id", chunk.joinToString("_or_") { it.id.toString() })
+                            parameter("limit", chunk.size)
+                        }.mapTo(present, UpNutEvent::id)
+                    } catch (th: Throwable) {
+                        logger.error("Error caught when trying to query eventually", th)
+                    }
+
+                    chunk.forEach inChunk@{ event ->
+                        if (event.id in present) return@inChunk
+
+                        logger.warn("Found missing event from eventually: {}", event.id)
+
+                        statement.bind("$1", event.id)
+                        statement.bind("$2", io.r2dbc.postgresql.codec.Json.of(Json.encodeToString(event)))
+                        statement.add()
+
+                        missingInsertCount++
+
+                        present.add(event.id)
+                    }
+
+                    if (missingInsertCount > 0) statement.awaitRowsUpdated()
+                }
+            }
+        }
+    }
+
+    suspend inline fun sendToFinally(list: List<UpNutEvent>) =
+        finallyActor.send(list)
+
     @OptIn(ObsoleteCoroutinesApi::class, ExperimentalTime::class)
     val actor = actor<Pair<Long, List<UpNutEvent>>> {
         var lastTime: Long = now()
@@ -448,7 +500,11 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                         events.flatMap(Pair<Long, List<UpNutEvent>>::second)
                             .distinctBy(UpNutEvent::id)
                             .let { events ->
-                                val timeTaken = measureTime { processEvents(events) }
+                                val timeTaken = measureTime {
+                                    processEvents(events) 
+                                }
+                                
+                                sendToFinally(events)
                                 ingestLogger.trace("Processed events in {}", timeTaken)
                             }
 
@@ -775,12 +831,12 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
         @OptIn(ExperimentalTime::class)
         suspend inline fun metadata(events: List<UpNutEvent>) {
             val missingData = nuts.client.sql("SELECT feed_id FROM metadata_collection WHERE feed_id = ANY($1) AND data IS NULL")
-                               .bind("$1", Array(events.size) { events[it].id })
-                               .map { row -> row.getValue<UUID>("feed_id") }
-                               .all()
-                               .collectList()
-                               .awaitFirstOrNull()
-                           ?: emptyList()
+                                  .bind("$1", Array(events.size) { events[it].id })
+                                  .map { row -> row.getValue<UUID>("feed_id") }
+                                  .all()
+                                  .collectList()
+                                  .awaitFirstOrNull()
+                              ?: emptyList()
 
             nuts.client.inConnectionAwait { connection ->
                 events.chunked(100).forEach { chunk ->
@@ -1128,377 +1184,9 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                 }
             }
         }
-
-/*        @OptIn(ExperimentalTime::class)
-        inline fun buildNutProcessing(): suspend (time: Long, events: List<UpNutEvent>) -> Unit = run {
-            val config = config.getJsonObjectOrNull("process")
-
-            val loggingEnabled = config?.getBooleanOrNull("logging_enabled") ?: true
-            val playerTags = config?.getBooleanOrNull("player_tags") ?: true
-            val gameTags = config?.getBooleanOrNull("game_tags") ?: true
-            val teamTags = config?.getBooleanOrNull("team_tags") ?: true
-            val eventMetadata = config?.getBooleanOrNull("event_metadata") ?: true
-
-            val logger = LoggerFactory.getLogger("dev.brella.blasement.upnut.ingest.Process")
-
-            if (loggingEnabled) {
-                if (playerTags) {
-                    if (gameTags) {
-                        if (teamTags) {
-                            if (eventMetadata) {
-                                return@run nuts@{ time, event ->
-                                    println("Players: ${measureTime { players(time, event) }}")
-                                    println("Games: ${measureTime { games(time, event) }}")
-                                    println("Teams: ${measureTime { teams(time, event) }}")
-                                    println("Metadata: ${measureTime { metadata(time, event) }}")
-
-                                    println("Logging + Insert: ${measureTime { logging(time, event, logger, insert(time, event)) }}")
-                                }
-                            } else {
-                                return@run nuts@{ time, event ->
-                                    players(time, event)
-                                    games(time, event)
-                                    teams(time, event)
-//                                    metadata(time, event)
-
-                                    logging(time, event, logger, insert(time, event))
-                                }
-                            }
-                        } else {
-                            if (eventMetadata) {
-                                return@run nuts@{ time, event ->
-                                    players(time, event)
-                                    games(time, event)
-//                                    teams(time, event)
-                                    metadata(time, event)
-
-                                    logging(time, event, logger, insert(time, event))
-                                }
-                            } else {
-                                return@run nuts@{ time, event ->
-                                    players(time, event)
-                                    games(time, event)
-//                                    teams(time, event)
-//                                    metadata(time, event)
-
-                                    logging(time, event, logger, insert(time, event))
-                                }
-                            }
-                        }
-                    } else {
-                        if (teamTags) {
-                            if (eventMetadata) {
-                                return@run nuts@{ time, event ->
-                                    players(time, event)
-//                                    games(time, event)
-                                    teams(time, event)
-                                    metadata(time, event)
-
-                                    logging(time, event, logger, insert(time, event))
-                                }
-                            } else {
-                                return@run nuts@{ time, event ->
-                                    players(time, event)
-//                                    games(time, event)
-                                    teams(time, event)
-//                                    metadata(time, event)
-
-                                    logging(time, event, logger, insert(time, event))
-                                }
-                            }
-                        } else {
-                            if (eventMetadata) {
-                                return@run nuts@{ time, event ->
-                                    players(time, event)
-//                                    games(time, event)
-//                                    teams(time, event)
-                                    metadata(time, event)
-
-                                    logging(time, event, logger, insert(time, event))
-                                }
-                            } else {
-                                return@run nuts@{ time, event ->
-                                    players(time, event)
-//                                    games(time, event)
-//                                    teams(time, event)
-//                                    metadata(time, event)
-
-                                    logging(time, event, logger, insert(time, event))
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    if (gameTags) {
-                        if (teamTags) {
-                            if (eventMetadata) {
-                                return@run nuts@{ time, event ->
-//                                    players(time, event)
-                                    games(time, event)
-                                    teams(time, event)
-                                    metadata(time, event)
-
-                                    logging(time, event, logger, insert(time, event))
-                                }
-                            } else {
-                                return@run nuts@{ time, event ->
-//                                    players(time, event)
-                                    games(time, event)
-                                    teams(time, event)
-//                                    metadata(time, event)
-
-                                    logging(time, event, logger, insert(time, event))
-                                }
-                            }
-                        } else {
-                            if (eventMetadata) {
-                                return@run nuts@{ time, event ->
-//                                    players(time, event)
-                                    games(time, event)
-//                                    teams(time, event)
-                                    metadata(time, event)
-
-                                    logging(time, event, logger, insert(time, event))
-                                }
-                            } else {
-                                return@run nuts@{ time, event ->
-//                                    players(time, event)
-                                    games(time, event)
-//                                    teams(time, event)
-//                                    metadata(time, event)
-
-                                    logging(time, event, logger, insert(time, event))
-                                }
-                            }
-                        }
-                    } else {
-                        if (teamTags) {
-                            if (eventMetadata) {
-                                return@run nuts@{ time, event ->
-//                                    players(time, event)
-//                                    games(time, event)
-                                    teams(time, event)
-                                    metadata(time, event)
-
-                                    logging(time, event, logger, insert(time, event))
-                                }
-                            } else {
-                                return@run nuts@{ time, event ->
-//                                    players(time, event)
-//                                    games(time, event)
-                                    teams(time, event)
-//                                    metadata(time, event)
-
-                                    logging(time, event, logger, insert(time, event))
-                                }
-                            }
-                        } else {
-                            if (eventMetadata) {
-                                return@run nuts@{ time, event ->
-//                                    players(time, event)
-//                                    games(time, event)
-//                                    teams(time, event)
-                                    metadata(time, event)
-
-                                    logging(time, event, logger, insert(time, event))
-                                }
-                            } else {
-                                return@run nuts@{ time, event ->
-//                                    players(time, event)
-//                                    games(time, event)
-//                                    teams(time, event)
-//                                    metadata(time, event)
-
-                                    logging(time, event, logger, insert(time, event))
-                                }
-                            }
-                        }
-                    }
-                }
-            } else {
-                if (playerTags) {
-                    if (gameTags) {
-                        if (teamTags) {
-                            if (eventMetadata) {
-                                return@run nuts@{ time, event ->
-                                    players(time, event)
-                                    games(time, event)
-                                    teams(time, event)
-                                    metadata(time, event)
-
-                                    insert(time, event)
-                                }
-                            } else {
-                                return@run nuts@{ time, event ->
-                                    players(time, event)
-                                    games(time, event)
-                                    teams(time, event)
-//                                    metadata(time, event)
-
-                                    insert(time, event)
-                                }
-                            }
-                        } else {
-                            if (eventMetadata) {
-                                return@run nuts@{ time, event ->
-                                    players(time, event)
-                                    games(time, event)
-//                                    teams(time, event)
-                                    metadata(time, event)
-
-                                    insert(time, event)
-                                }
-                            } else {
-                                return@run nuts@{ time, event ->
-                                    players(time, event)
-                                    games(time, event)
-//                                    teams(time, event)
-//                                    metadata(time, event)
-
-                                    insert(time, event)
-                                }
-                            }
-                        }
-                    } else {
-                        if (teamTags) {
-                            if (eventMetadata) {
-                                return@run nuts@{ time, event ->
-                                    players(time, event)
-//                                    games(time, event)
-                                    teams(time, event)
-                                    metadata(time, event)
-
-                                    insert(time, event)
-                                }
-                            } else {
-                                return@run nuts@{ time, event ->
-                                    players(time, event)
-//                                    games(time, event)
-                                    teams(time, event)
-//                                    metadata(time, event)
-
-                                    insert(time, event)
-                                }
-                            }
-                        } else {
-                            if (eventMetadata) {
-                                return@run nuts@{ time, event ->
-                                    players(time, event)
-//                                    games(time, event)
-//                                    teams(time, event)
-                                    metadata(time, event)
-
-                                    insert(time, event)
-                                }
-                            } else {
-                                return@run nuts@{ time, event ->
-                                    players(time, event)
-//                                    games(time, event)
-//                                    teams(time, event)
-//                                    metadata(time, event)
-
-                                    insert(time, event)
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    if (gameTags) {
-                        if (teamTags) {
-                            if (eventMetadata) {
-                                return@run nuts@{ time, event ->
-//                                    players(time, event)
-                                    games(time, event)
-                                    teams(time, event)
-                                    metadata(time, event)
-
-                                    insert(time, event)
-                                }
-                            } else {
-                                return@run nuts@{ time, event ->
-//                                    players(time, event)
-                                    games(time, event)
-                                    teams(time, event)
-//                                    metadata(time, event)
-
-                                    insert(time, event)
-                                }
-                            }
-                        } else {
-                            if (eventMetadata) {
-                                return@run nuts@{ time, event ->
-//                                    players(time, event)
-                                    games(time, event)
-//                                    teams(time, event)
-                                    metadata(time, event)
-
-                                    insert(time, event)
-                                }
-                            } else {
-                                return@run nuts@{ time, event ->
-//                                    players(time, event)
-                                    games(time, event)
-//                                    teams(time, event)
-//                                    metadata(time, event)
-
-                                    insert(time, event)
-                                }
-                            }
-                        }
-                    } else {
-                        if (teamTags) {
-                            if (eventMetadata) {
-                                return@run nuts@{ time, event ->
-//                                    players(time, event)
-//                                    games(time, event)
-                                    teams(time, event)
-                                    metadata(time, event)
-
-                                    insert(time, event)
-                                }
-                            } else {
-                                return@run nuts@{ time, event ->
-//                                    players(time, event)
-//                                    games(time, event)
-                                    teams(time, event)
-//                                    metadata(time, event)
-
-                                    insert(time, event)
-                                }
-                            }
-                        } else {
-                            if (eventMetadata) {
-                                return@run nuts@{ time, event ->
-//                                    players(time, event)
-//                                    games(time, event)
-//                                    teams(time, event)
-                                    metadata(time, event)
-
-                                    insert(time, event)
-                                }
-                            } else {
-                                return@run nuts@{ time, event ->
-//                                    players(time, event)
-//                                    games(time, event)
-//                                    teams(time, event)
-//                                    metadata(time, event)
-
-                                    insert(time, event)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }*/
     }
 
     suspend fun join() {
-//        globalByTopJob.join()
-//        globalByHotJob.join()
-//        teamsByTopJob.join()
-//        teamsByHotJob.join()
-
         jobs.joinAll()
     }
 }
