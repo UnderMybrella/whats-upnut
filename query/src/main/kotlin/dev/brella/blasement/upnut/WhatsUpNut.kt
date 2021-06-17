@@ -42,6 +42,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.put
+import org.slf4j.LoggerFactory
 import org.slf4j.event.Level
 import org.springframework.r2dbc.core.DatabaseClient
 import org.springframework.r2dbc.core.await
@@ -62,6 +63,13 @@ import kotlin.time.ExperimentalTime
 fun main(args: Array<String>) = io.ktor.server.netty.EngineMain.main(args)
 
 class WhatsUpNut {
+    companion object {
+        val REMOVE_PARAMETERS_GLOBAL_EVENTUALLY = arrayOf("before", "after", "time", "sortorder", "start", "offset")
+        val REMOVE_PARAMETERS_TEAM_EVENTUALLY = REMOVE_PARAMETERS_GLOBAL_EVENTUALLY + arrayOf("teamTags", "id")
+        val REMOVE_PARAMETERS_PLAYER_EVENTUALLY = REMOVE_PARAMETERS_GLOBAL_EVENTUALLY + arrayOf("playerTags", "id")
+        val REMOVE_PARAMETERS_GAME_EVENTUALLY = REMOVE_PARAMETERS_GLOBAL_EVENTUALLY + arrayOf("gameTags", "id")
+    }
+
     val configJson: JsonObject? = File(System.getProperty("upnut.query") ?: "upnut.json").takeIf(File::exists)?.readText()?.let(Json::decodeFromString)
     val upnut = UpNutClient(configJson?.getJsonObjectOrNull("r2dbc") ?: File(System.getProperty("upnut.r2dbc") ?: "r2dbc.json").readText().let(Json::decodeFromString))
     val http = HttpClient(OkHttp) {
@@ -141,25 +149,27 @@ class WhatsUpNut {
         .buildKotlin<String, List<UpNutEvent>>()
 
     val feedTopGlobalCache = Caffeine.newBuilder()
-        .expireAfterWrite(1, TimeUnit.MINUTES)
+        .expireAfterWrite(1, TimeUnit.SECONDS)
         .buildKotlin<String, List<UpNutEvent>>()
 
     val feedTopGameCache = Caffeine.newBuilder()
-        .expireAfterWrite(1, TimeUnit.MINUTES)
+        .expireAfterWrite(1, TimeUnit.SECONDS)
         .buildKotlin<String, List<UpNutEvent>>()
 
     val feedTopPlayerCache = Caffeine.newBuilder()
-        .expireAfterWrite(1, TimeUnit.MINUTES)
+        .expireAfterWrite(1, TimeUnit.SECONDS)
         .buildKotlin<String, List<UpNutEvent>>()
 
     val feedTopTeamCache = Caffeine.newBuilder()
-        .expireAfterWrite(1, TimeUnit.MINUTES)
+        .expireAfterWrite(1, TimeUnit.SECONDS)
         .buildKotlin<String, List<UpNutEvent>>()
+
+    val logger = LoggerFactory.getLogger("dev.brella.blasement.upnut.query.Query")
 
     suspend fun PipelineContext<Unit, ApplicationCall>.processGlobal(
         cache: KotlinCache<String, List<UpNutEvent>>,
         baseFunc: suspend (
-            time: Long, limit: Int,
+            time: Long, limit: Int, start: Int,
             noneOfProviders: List<UUID>?,
             noneOfSources: List<UUID>?,
             oneOfProviders: List<UUID>?,
@@ -208,10 +218,11 @@ class WhatsUpNut {
             val provider = parameters["provider"]?.uuidOrNull()
             val source = (parameters["player"] ?: parameters["player"])?.uuidOrNull()
 
-            val limit = (parameters["limit"]?.toIntOrNull() ?: call.request.header("X-UpNut-Limit")?.toIntOrNull())?.coerceIn(1, 50) ?: 50
+            val limit = (parameters["count"]?.toIntOrNull() ?: parameters["limit"]?.toIntOrNull() ?: call.request.header("X-UpNut-Count")?.toIntOrNull() ?: call.request.header("X-UpNut-Limit")?.toIntOrNull())?.coerceAtLeast(1) ?: 50
+            val offset = (parameters["start"]?.toIntOrNull() ?: parameters["offset"]?.toIntOrNull() ?: call.request.header("X-UpNut-Start")?.toIntOrNull() ?: call.request.header("X-UpNut-Offset")?.toIntOrNull())?.coerceAtLeast(0) ?: 0
 
             val nuts =
-                baseFunc(time, limit, noneOfProviders, noneOfSources, oneOfProviders, oneOfSources) {
+                baseFunc(time, limit, offset, noneOfProviders, noneOfSources, oneOfProviders, oneOfSources) {
                     season(season)
                         .tournament(tournament)
                         .type(type)
@@ -224,14 +235,14 @@ class WhatsUpNut {
                     }
                 }?.toMap(LinkedHashMap()) ?: emptyMap()
 
-            http.eventually(nuts, upnut, time, limit, season, tournament, type, day, phase, category, provider, source)
+            http.eventually(nuts, upnut, logger, time, limit, offset, season, tournament, type, day, phase, category, provider, source)
         }.respond(call)
     }
 
     suspend fun PipelineContext<Unit, ApplicationCall>.processFiltered(
         cache: KotlinCache<String, List<UpNutEvent>>,
         baseFunc: suspend (
-            id: UUID, time: Long, limit: Int,
+            id: UUID, time: Long, limit: Int, offset: Int,
             noneOfProviders: List<UUID>?,
             noneOfSources: List<UUID>?,
             oneOfProviders: List<UUID>?,
@@ -285,10 +296,11 @@ class WhatsUpNut {
             val provider = parameters["provider"]?.uuidOrNull()
             val source = (parameters["player"] ?: parameters["player"])?.uuidOrNull()
 
-            val limit = (parameters["limit"]?.toIntOrNull() ?: call.request.header("X-UpNut-Limit")?.toIntOrNull())?.coerceIn(1, 50) ?: 50
+            val limit = (parameters["count"]?.toIntOrNull() ?: parameters["limit"]?.toIntOrNull() ?: call.request.header("X-UpNut-Count")?.toIntOrNull() ?: call.request.header("X-UpNut-Limit")?.toIntOrNull())?.coerceAtLeast(1) ?: 50
+            val offset = (parameters["start"]?.toIntOrNull() ?: parameters["offset"]?.toIntOrNull() ?: call.request.header("X-UpNut-Start")?.toIntOrNull() ?: call.request.header("X-UpNut-Offset")?.toIntOrNull())?.coerceAtLeast(0) ?: 0
 
             val nuts =
-                baseFunc(id, time, limit, noneOfProviders, noneOfSources, oneOfProviders, oneOfSources) {
+                baseFunc(id, time, limit, offset, noneOfProviders, noneOfSources, oneOfProviders, oneOfSources) {
                     season(season)
                         .tournament(tournament)
                         .type(type)
@@ -301,7 +313,7 @@ class WhatsUpNut {
                     }
                 }?.toMap(LinkedHashMap()) ?: emptyMap()
 
-            http.eventually(nuts, upnut, time, limit, season, tournament, type, day, phase, category, provider, source)
+            http.eventually(nuts, upnut, logger, time, limit, offset, season, tournament, type, day, phase, category, provider, source)
         }.respond(call)
     }
 
@@ -337,6 +349,33 @@ class WhatsUpNut {
                             ?: emptyList()
 
                 call.respond(books)
+            }
+
+            route("/gc") {
+                get("/pending") {
+                    call.respond(
+                        upnut.client.sql("SELECT feed_id FROM metadata_collection WHERE data IS NULL")
+                            .map { row -> row.getValue<UUID>("feed_id").toString() }
+                            .all()
+                            .collectList()
+                            .awaitFirstOrNull()
+                        ?: emptyList()
+                    )
+                }
+
+                get("/complete") {
+                    call.respond(
+                        upnut.client.sql("SELECT feed_id, data FROM metadata_collection WHERE data IS NOT NULL")
+                            .map { row ->
+                                row.getValue<UUID>("feed_id").toString() to
+                                        Json.parseToJsonElement(row.getValue("data"))
+                            }
+                            .all()
+                            .collectMap(Pair<String, JsonElement>::first, Pair<String, JsonElement>::second)
+                            .awaitFirstOrNull()
+                        ?: emptyMap()
+                    )
+                }
             }
 
             put("/{feed_id}/{provider}") {
@@ -611,11 +650,6 @@ class WhatsUpNut {
 
                 get("/global") {
                     val parameters = call.request.queryParameters
-                    val category = parameters["category"]?.toIntOrNull()
-                    val limit = parameters["limit"]?.toIntOrNull() ?: 100
-                    val type = parameters["type"]?.toIntOrNull()
-                    val sort = parameters["sort"]?.toIntOrNull()
-                    val start = parameters["start"]?.toIntOrNull()
 
                     val after = parameters["after"]?.let { time ->
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
@@ -625,63 +659,38 @@ class WhatsUpNut {
                     } ?: call.request.header("X-UpNut-Time")?.let { time ->
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
                     } ?: Instant.now(Clock.systemUTC()).toEpochMilli()
-
-                    val player = (parameters["player"] ?: call.request.header("X-UpNut-Player"))?.uuidOrNull()
+                    val start = parameters["start"]?.toIntOrNull()
+                    val sort = parameters["sort"]?.toIntOrNull()
 
                     when (sort) {
-                        /** Newest */
-                        0 -> call.redirectInternally("/events") {
-                            append("before", (time / 1000).toString())
-                            after?.let { append("after", (it / 1000).toString()) }
-                            append("limit", limit.toString())
-
-                            append("time", time.toString())
-
-                            if (player != null) append("player", player.toString())
-
-                            if (category != null) append("category", category.toString())
-                            if (type != null) append("type", type.toString())
-                            if (start != null) append("offset", start.toString())
-
-                            append("sortorder", "desc")
-                        }
                         /** Oldest */
                         1 -> call.redirectInternally("/events") {
                             append("before", (time / 1000).toString())
                             after?.let { append("after", (it / 1000).toString()) }
-                            append("limit", limit.toString())
-
                             append("time", time.toString())
-
-                            if (player != null) append("player", player.toString())
-
-                            if (category != null) append("category", category.toString())
-                            if (type != null) append("type", type.toString())
+                            append("sortorder", "asc")
                             if (start != null) append("offset", start.toString())
 
-                            append("sortorder", "asc")
+                            appendAll(parameters.filter { k, _ -> k.toLowerCase() !in REMOVE_PARAMETERS_GLOBAL_EVENTUALLY })
                         }
                         /** Top */
                         2 -> call.redirectInternally("/feed/top/global") {
-                            append("limit", limit.toString())
-                            append("time", time.toString())
-
-                            if (player != null) append("player", player.toString())
-
-                            if (category != null) append("category", category.toString())
-                            if (type != null) append("type", type.toString())
-                            if (start != null) append("offset", start.toString())
+                            appendAll(parameters)
                         }
                         /** Hot */
-                        else -> call.redirectInternally("/feed/hot/global") {
-                            append("limit", limit.toString())
+                        3 -> call.redirectInternally("/feed/hot/global") {
+                            appendAll(parameters)
+                        }
+
+                        /** Newest */
+                        else -> call.redirectInternally("/events") {
+                            append("before", (time / 1000).toString())
+                            after?.let { append("after", (it / 1000).toString()) }
                             append("time", time.toString())
-
-                            if (player != null) append("player", player.toString())
-
-                            if (category != null) append("category", category.toString())
-                            if (type != null) append("type", type.toString())
+                            append("sortorder", "desc")
                             if (start != null) append("offset", start.toString())
+
+                            appendAll(parameters.filter { k, _ -> k.toLowerCase() !in REMOVE_PARAMETERS_GLOBAL_EVENTUALLY })
                         }
                     }
                 }
@@ -690,9 +699,6 @@ class WhatsUpNut {
                     val parameters = call.request.queryParameters
 
                     val id = parameters["id"] ?: return@get call.respondJsonObject(HttpStatusCode.BadRequest) { put("error", "No ID provided") }
-                    val category = parameters["category"]?.toIntOrNull()
-                    val limit = parameters["limit"]?.toIntOrNull() ?: 100
-                    val type = parameters["type"]?.toIntOrNull()
                     val sort = parameters["sort"]?.toIntOrNull()
                     val start = parameters["start"]?.toIntOrNull()
 
@@ -705,70 +711,37 @@ class WhatsUpNut {
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
                     } ?: Instant.now(Clock.systemUTC()).toEpochMilli()
 
-                    val player = (parameters["player"] ?: call.request.header("X-UpNut-Player"))?.uuidOrNull()
-
                     when (sort) {
-                        /** Newest */
-                        0 -> call.redirectInternally("/events") {
-                            append("before", (time / 1000).toString())
-                            after?.let { append("after", (it / 1000).toString()) }
-                            append("limit", limit.toString())
-
-                            append("time", time.toString())
-
-                            if (player != null) append("player", player.toString())
-
-                            if (category != null) append("category", category.toString())
-                            if (type != null) append("type", type.toString())
-                            if (start != null) append("offset", start.toString())
-
-                            append("teamTags", id)
-
-                            append("sortorder", "desc")
-                        }
                         /** Oldest */
                         1 -> call.redirectInternally("/events") {
                             append("before", (time / 1000).toString())
                             after?.let { append("after", (it / 1000).toString()) }
-                            append("limit", limit.toString())
-
                             append("time", time.toString())
-
-                            if (player != null) append("player", player.toString())
-
-                            if (category != null) append("category", category.toString())
-                            if (type != null) append("type", type.toString())
                             if (start != null) append("offset", start.toString())
-
                             append("teamTags", id)
-
                             append("sortorder", "asc")
+
+                            appendAll(parameters.filter { k, _ -> k.toLowerCase() !in REMOVE_PARAMETERS_TEAM_EVENTUALLY })
                         }
                         /** Top */
                         2 -> call.redirectInternally("/feed/top/team") {
-                            append("limit", limit.toString())
-                            append("time", time.toString())
-
-                            if (player != null) append("player", player.toString())
-
-                            if (category != null) append("category", category.toString())
-                            if (type != null) append("type", type.toString())
-                            if (start != null) append("offset", start.toString())
-
-                            append("id", id)
+                            appendAll(parameters)
                         }
                         /** Hot */
-                        else -> call.redirectInternally("/feed/hot/team") {
-                            append("limit", limit.toString())
+                        3 -> call.redirectInternally("/feed/hot/team") {
+                            appendAll(parameters)
+                        }
+
+                        /** Newest */
+                        else -> call.redirectInternally("/events") {
+                            append("before", (time / 1000).toString())
+                            after?.let { append("after", (it / 1000).toString()) }
                             append("time", time.toString())
-
-                            if (player != null) append("player", player.toString())
-
-                            if (category != null) append("category", category.toString())
-                            if (type != null) append("type", type.toString())
                             if (start != null) append("offset", start.toString())
+                            append("teamTags", id)
+                            append("sortorder", "desc")
 
-                            append("id", id)
+                            appendAll(parameters.filter { k, _ -> k.toLowerCase() !in REMOVE_PARAMETERS_TEAM_EVENTUALLY })
                         }
                     }
                 }
@@ -777,9 +750,6 @@ class WhatsUpNut {
                     val parameters = call.request.queryParameters
 
                     val id = parameters["id"] ?: return@get call.respondJsonObject(HttpStatusCode.BadRequest) { put("error", "No ID provided") }
-                    val category = parameters["category"]?.toIntOrNull()
-                    val limit = parameters["limit"]?.toIntOrNull() ?: 100
-                    val type = parameters["type"]?.toIntOrNull()
                     val sort = parameters["sort"]?.toIntOrNull()
                     val start = parameters["start"]?.toIntOrNull()
                     val after = parameters["after"]?.let { time ->
@@ -791,70 +761,35 @@ class WhatsUpNut {
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
                     } ?: Instant.now(Clock.systemUTC()).toEpochMilli()
 
-                    val player = (parameters["player"] ?: call.request.header("X-UpNut-Player"))?.uuidOrNull()
-
                     when (sort) {
-                        /** Newest */
-                        0 -> call.redirectInternally("/events") {
-                            append("before", (time / 1000).toString())
-                            after?.let { append("after", (it / 1000).toString()) }
-                            append("limit", limit.toString())
-
-                            append("time", time.toString())
-
-                            if (player != null) append("player", player.toString())
-
-                            if (category != null) append("category", category.toString())
-                            if (type != null) append("type", type.toString())
-                            if (start != null) append("offset", start.toString())
-
-                            append("playerTags", id)
-
-                            append("sortorder", "desc")
-                        }
                         /** Oldest */
                         1 -> call.redirectInternally("/events") {
                             append("before", (time / 1000).toString())
                             after?.let { append("after", (it / 1000).toString()) }
-                            append("limit", limit.toString())
-
-                            append("time", time.toString())
-
-                            if (player != null) append("player", player.toString())
-
-                            if (category != null) append("category", category.toString())
-                            if (type != null) append("type", type.toString())
                             if (start != null) append("offset", start.toString())
-
                             append("playerTags", id)
-
                             append("sortorder", "asc")
+
+                            appendAll(parameters.filter { k, _ -> k.toLowerCase() !in REMOVE_PARAMETERS_PLAYER_EVENTUALLY })
                         }
                         /** Top */
                         2 -> call.redirectInternally("/feed/top/player") {
-                            append("limit", limit.toString())
-                            append("time", time.toString())
-
-                            if (player != null) append("player", player.toString())
-
-                            if (category != null) append("category", category.toString())
-                            if (type != null) append("type", type.toString())
-                            if (start != null) append("offset", start.toString())
-
-                            append("id", id)
+                            appendAll(parameters)
                         }
                         /** Hot */
-                        else -> call.redirectInternally("/feed/hot/player") {
-                            append("limit", limit.toString())
-                            append("time", time.toString())
+                        3 -> call.redirectInternally("/feed/hot/player") {
+                            appendAll(parameters)
+                        }
 
-                            if (player != null) append("player", player.toString())
-
-                            if (category != null) append("category", category.toString())
-                            if (type != null) append("type", type.toString())
+                        /** Newest */
+                        else -> call.redirectInternally("/events") {
+                            append("before", (time / 1000).toString())
+                            after?.let { append("after", (it / 1000).toString()) }
                             if (start != null) append("offset", start.toString())
+                            append("playerTags", id)
+                            append("sortorder", "desc")
 
-                            append("id", id)
+                            appendAll(parameters.filter { k, _ -> k.toLowerCase() !in REMOVE_PARAMETERS_PLAYER_EVENTUALLY })
                         }
                     }
                 }
@@ -879,67 +814,34 @@ class WhatsUpNut {
                     val player = (parameters["player"] ?: call.request.header("X-UpNut-Player"))?.uuidOrNull()
 
                     when (sort) {
-                        /** Newest */
-                        0 -> call.redirectInternally("/events") {
-                            append("before", (time / 1000).toString())
-                            after?.let { append("after", (it / 1000).toString()) }
-                            append("limit", limit.toString())
-
-                            append("time", time.toString())
-
-                            if (player != null) append("player", player.toString())
-
-                            if (category != null) append("category", category.toString())
-                            if (type != null) append("type", type.toString())
-                            if (start != null) append("offset", start.toString())
-
-                            append("gameTags", id)
-
-                            append("sortorder", "desc")
-                        }
                         /** Oldest */
                         1 -> call.redirectInternally("/events") {
                             append("before", (time / 1000).toString())
                             after?.let { append("after", (it / 1000).toString()) }
-                            append("limit", limit.toString())
-
-                            append("time", time.toString())
-
-                            if (player != null) append("player", player.toString())
-
-                            if (category != null) append("category", category.toString())
-                            if (type != null) append("type", type.toString())
                             if (start != null) append("offset", start.toString())
-
                             append("gameTags", id)
-
                             append("sortorder", "asc")
+
+                            appendAll(parameters.filter { k, _ -> k.toLowerCase() !in REMOVE_PARAMETERS_GAME_EVENTUALLY })
                         }
                         /** Top */
                         2 -> call.redirectInternally("/feed/top/game") {
-                            append("limit", limit.toString())
-                            append("time", time.toString())
-
-                            if (player != null) append("player", player.toString())
-
-                            if (category != null) append("category", category.toString())
-                            if (type != null) append("type", type.toString())
-                            if (start != null) append("offset", start.toString())
-
-                            append("id", id)
+                            appendAll(parameters)
                         }
                         /** Hot */
-                        else -> call.redirectInternally("/feed/hot/game") {
-                            append("limit", limit.toString())
-                            append("time", time.toString())
+                        3 -> call.redirectInternally("/feed/hot/game") {
+                            appendAll(parameters)
+                        }
 
-                            if (player != null) append("player", player.toString())
-
-                            if (category != null) append("category", category.toString())
-                            if (type != null) append("type", type.toString())
+                        /** Newest */
+                        else -> call.redirectInternally("/events") {
+                            append("before", (time / 1000).toString())
+                            after?.let { append("after", (it / 1000).toString()) }
                             if (start != null) append("offset", start.toString())
+                            append("gameTags", id)
+                            append("sortorder", "desc")
 
-                            append("id", id)
+                            appendAll(parameters.filter { k, _ -> k.toLowerCase() !in REMOVE_PARAMETERS_GAME_EVENTUALLY })
                         }
                     }
                 }

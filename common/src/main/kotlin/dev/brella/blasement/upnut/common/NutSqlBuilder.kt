@@ -8,6 +8,7 @@ import dev.brella.blasement.upnut.common.UpNutClient.Companion.GAME_VAR
 import dev.brella.blasement.upnut.common.UpNutClient.Companion.LIMIT_VAR
 import dev.brella.blasement.upnut.common.UpNutClient.Companion.NONE_OF_PROVIDERS_VAR
 import dev.brella.blasement.upnut.common.UpNutClient.Companion.NONE_OF_SOURCES_VAR
+import dev.brella.blasement.upnut.common.UpNutClient.Companion.OFFSET_VAR
 import dev.brella.blasement.upnut.common.UpNutClient.Companion.ONE_OF_PROVIDERS_VAR
 import dev.brella.blasement.upnut.common.UpNutClient.Companion.ONE_OF_SOURCES_VAR
 import dev.brella.blasement.upnut.common.UpNutClient.Companion.PHASE_VAR
@@ -29,6 +30,7 @@ class NutSqlBuilder(val statement: DatabaseClient.GenericExecuteSpec, val mappin
 
     inline fun time(long: Long) = _bind(TIME_VAR, long)
     inline fun limit(limit: Int) = _bind(LIMIT_VAR, limit)
+    inline fun offset(offset: Int) = _bind(OFFSET_VAR, offset)
     inline fun provider(uuid: UUID) = _bind(SINGLE_PROVIDER_VAR, uuid)
     inline fun source(uuid: UUID?) = _bind(SINGLE_SOURCE_VAR, uuid)
 

@@ -23,6 +23,7 @@ class UpNutClient(config: JsonObject) {
     companion object {
         const val TIME_VAR = ":time:"
         const val LIMIT_VAR = ":limit:"
+        const val OFFSET_VAR = ":offset:"
         const val SINGLE_PROVIDER_VAR = ":provider:"
         const val SINGLE_SOURCE_VAR = ":source:"
         const val ONE_OF_SOURCES_VAR = ":one_of_sources:"
@@ -134,7 +135,7 @@ class UpNutClient(config: JsonObject) {
 
         //        @Language("PostgreSQL")
         inline fun getEventIDs(vararg where: String) =
-            NutSqlStatement("SELECT feed_id FROM event_metadata ${if (where.isEmpty()) "" else where.joinToString(prefix = "WHERE ", separator = " AND ")} ORDER BY created DESC LIMIT $LIMIT_VAR")
+            NutSqlStatement("SELECT feed_id FROM event_metadata ${if (where.isEmpty()) "" else where.joinToString(prefix = "WHERE ", separator = " AND ")} ORDER BY created DESC LIMIT $LIMIT_VAR OFFSET $OFFSET_VAR")
 
         //        @Language("PostgreSQL")
         inline fun hotPSQL(vararg where: String) =
@@ -144,7 +145,7 @@ class UpNutClient(config: JsonObject) {
                         prefix = "WHERE ",
                         separator = " AND "
                     )
-                } GROUP BY feed_id) as list JOIN (SELECT feed_id, created FROM event_metadata) as meta ON list.feed_id = meta.feed_id ORDER BY sort DESC, list.nuts DESC, list.scales DESC, list.time DESC LIMIT $LIMIT_VAR"
+                } GROUP BY feed_id) as list JOIN (SELECT feed_id, created FROM event_metadata) as meta ON list.feed_id = meta.feed_id ORDER BY sort DESC, list.nuts DESC, list.scales DESC, list.time DESC LIMIT $LIMIT_VAR OFFSET $OFFSET_VAR"
             )
 
         inline fun hotPSQLWithTime(vararg and: String) =
@@ -166,7 +167,7 @@ class UpNutClient(config: JsonObject) {
                         prefix = "WHERE ",
                         separator = " AND "
                     )
-                } GROUP BY feed_id ORDER BY nuts DESC, scales DESC LIMIT $LIMIT_VAR"
+                } GROUP BY feed_id ORDER BY nuts DESC, scales DESC LIMIT $LIMIT_VAR OFFSET $OFFSET_VAR"
             )
 
         inline fun topPSQLWithTime(vararg and: String) =
@@ -235,18 +236,23 @@ class UpNutClient(config: JsonObject) {
         oneOfProviders: List<UUID>? = null,
         oneOfSources: List<UUID>? = null
     ) =
-        EVENTUALLY_EVENTS(client)
-            .feedIDs(feedIDs)
-            .time(time)
-            .noneOfProviders(noneOfProviders)
-            .noneOfSources(noneOfSources)
-            .oneOfProviders(oneOfProviders)
-            .oneOfSources(oneOfSources)
-            .map { row -> Pair(row.getValue<UUID>("feed_id"), Pair(row.get<Int?>("nuts"), row.get<Int?>("scales"))) }
-            .all()
-            .collectList()
-            .awaitSingleOrNull()
-            ?.toMap()
+        try {
+            EVENTUALLY_EVENTS(client)
+                .feedIDs(feedIDs)
+                .time(time)
+                .noneOfProviders(noneOfProviders)
+                .noneOfSources(noneOfSources)
+                .oneOfProviders(oneOfProviders)
+                .oneOfSources(oneOfSources)
+                .map { row -> Pair(row.getValue<UUID>("feed_id"), Pair(row.get<Int?>("nuts"), row.get<Int?>("scales"))) }
+                .all()
+                .collectList()
+                .awaitFirst()
+                .toMap()
+        } catch (th: Throwable) {
+            th.printStackTrace()
+            throw th
+        }
 
     suspend fun eventuallyNutsList(
         feedIDs: Iterable<UUID>, time: Long,
@@ -312,11 +318,12 @@ class UpNutClient(config: JsonObject) {
             ?.filterNotNull()
             ?.toMap()
 
-    suspend fun globalEventsBefore(time: Long, limit: Int, feedIDs: Iterable<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec) =
+    suspend fun globalEventsBefore(time: Long, limit: Int, offset: Int, feedIDs: Iterable<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec) =
         GLOBAL_EVENT_IDS(client)
             .metadata()
             .created(time)
             .limit(limit)
+            .offset(offset)
             .feedIDs(feedIDs)
             .addMetadata()
             .map { row -> row.getValue<UUID>("feed_id") }
@@ -327,6 +334,7 @@ class UpNutClient(config: JsonObject) {
     suspend fun globalHot(
         time: Long,
         limit: Int,
+        offset: Int,
         noneOfProviders: List<UUID>? = null,
         noneOfSources: List<UUID>? = null,
         oneOfProviders: List<UUID>? = null,
@@ -337,6 +345,7 @@ class UpNutClient(config: JsonObject) {
             .metadata()
             .time(time)
             .limit(limit)
+            .offset(offset)
             .noneOfProviders(noneOfProviders)
             .noneOfSources(noneOfSources)
             .oneOfProviders(oneOfProviders)
@@ -347,11 +356,12 @@ class UpNutClient(config: JsonObject) {
             .collectList()
             .awaitFirstOrNull()
 
-    suspend fun globalHotInSources(time: Long, limit: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
+    suspend fun globalHotInSources(time: Long, limit: Int, offset: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
         GLOBAL_HOT_SOURCES(client)
             .metadata()
             .time(time)
             .limit(limit)
+            .offset(offset)
             .oneOfSources(sources)
             .addMetadata()
             .fetch()
@@ -359,11 +369,12 @@ class UpNutClient(config: JsonObject) {
             .collectList()
             .awaitSingleOrNull()
 
-    suspend fun globalHotNotInSources(time: Long, limit: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
+    suspend fun globalHotNotInSources(time: Long, limit: Int, offset: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
         GLOBAL_HOT_NOT_SOURCES(client)
             .metadata()
             .time(time)
             .limit(limit)
+            .offset(offset)
             .oneOfSources(sources)
             .addMetadata()
             .fetch()
@@ -372,7 +383,7 @@ class UpNutClient(config: JsonObject) {
             .awaitSingleOrNull()
 
     suspend fun globalTop(
-        time: Long, limit: Int,
+        time: Long, limit: Int, offset: Int,
         noneOfProviders: List<UUID>? = null,
         noneOfSources: List<UUID>? = null,
         oneOfProviders: List<UUID>? = null,
@@ -383,6 +394,7 @@ class UpNutClient(config: JsonObject) {
             .metadata()
             .time(time)
             .limit(limit)
+            .offset(offset)
             .noneOfProviders(noneOfProviders)
             .noneOfSources(noneOfSources)
             .oneOfProviders(oneOfProviders)
@@ -393,11 +405,12 @@ class UpNutClient(config: JsonObject) {
             .collectList()
             .awaitSingleOrNull()
 
-    suspend fun globalTopInSources(time: Long, limit: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
+    suspend fun globalTopInSources(time: Long, limit: Int, offset: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
         GLOBAL_TOP_SOURCES(client)
             .metadata()
             .time(time)
             .limit(limit)
+            .offset(offset)
             .oneOfSources(sources)
             .addMetadata()
             .fetch()
@@ -405,11 +418,12 @@ class UpNutClient(config: JsonObject) {
             .collectList()
             .awaitSingleOrNull()
 
-    suspend fun globalTopNotInSources(time: Long, limit: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
+    suspend fun globalTopNotInSources(time: Long, limit: Int, offset: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
         GLOBAL_TOP_NOT_SOURCES(client)
             .metadata()
             .time(time)
             .limit(limit)
+            .offset(offset)
             .oneOfSources(sources)
             .addMetadata()
             .fetch()
@@ -418,12 +432,13 @@ class UpNutClient(config: JsonObject) {
             .awaitSingleOrNull()
 
 
-    suspend fun teamEventsBefore(teamID: UUID, time: Long, limit: Int, feedIDs: Iterable<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec) =
+    suspend fun teamEventsBefore(teamID: UUID, time: Long, limit: Int, offset: Int, feedIDs: Iterable<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec) =
         TEAM_EVENT_IDS(client)
             .metadata()
             .team(teamID)
             .created(time)
             .limit(limit)
+            .offset(offset)
             .feedIDs(feedIDs)
             .addMetadata()
             .fetch()
@@ -433,7 +448,7 @@ class UpNutClient(config: JsonObject) {
             .awaitSingleOrNull()
 
     suspend fun teamHot(
-        teamID: UUID, time: Long, limit: Int,
+        teamID: UUID, time: Long, limit: Int, offset: Int,
         noneOfProviders: List<UUID>? = null,
         noneOfSources: List<UUID>? = null,
         oneOfProviders: List<UUID>? = null,
@@ -445,6 +460,7 @@ class UpNutClient(config: JsonObject) {
             .team(teamID)
             .time(time)
             .limit(limit)
+            .offset(offset)
             .noneOfProviders(noneOfProviders)
             .noneOfSources(noneOfSources)
             .oneOfProviders(oneOfProviders)
@@ -455,12 +471,13 @@ class UpNutClient(config: JsonObject) {
             .collectList()
             .awaitSingleOrNull()
 
-    suspend fun teamHotInSources(teamID: UUID, time: Long, limit: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
+    suspend fun teamHotInSources(teamID: UUID, time: Long, limit: Int, offset: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
         TEAM_HOT_SOURCES(client)
             .metadata()
             .team(teamID)
             .time(time)
             .limit(limit)
+            .offset(offset)
             .oneOfSources(sources)
             .addMetadata()
             .fetch()
@@ -468,12 +485,13 @@ class UpNutClient(config: JsonObject) {
             .collectList()
             .awaitSingleOrNull()
 
-    suspend fun teamHotNotInSources(teamID: UUID, time: Long, limit: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
+    suspend fun teamHotNotInSources(teamID: UUID, time: Long, limit: Int, offset: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
         TEAM_HOT_NOT_SOURCES(client)
             .metadata()
             .team(teamID)
             .time(time)
             .limit(limit)
+            .offset(offset)
             .oneOfSources(sources)
             .addMetadata()
             .fetch()
@@ -482,7 +500,7 @@ class UpNutClient(config: JsonObject) {
             .awaitSingleOrNull()
 
     suspend fun teamTop(
-        teamID: UUID, time: Long, limit: Int,
+        teamID: UUID, time: Long, limit: Int, offset: Int,
         noneOfProviders: List<UUID>? = null,
         noneOfSources: List<UUID>? = null,
         oneOfProviders: List<UUID>? = null,
@@ -494,6 +512,7 @@ class UpNutClient(config: JsonObject) {
             .team(teamID)
             .time(time)
             .limit(limit)
+            .offset(offset)
             .noneOfProviders(noneOfProviders)
             .noneOfSources(noneOfSources)
             .oneOfProviders(oneOfProviders)
@@ -504,12 +523,13 @@ class UpNutClient(config: JsonObject) {
             .collectList()
             .awaitSingleOrNull()
 
-    suspend fun teamTopInSources(teamID: UUID, time: Long, limit: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
+    suspend fun teamTopInSources(teamID: UUID, time: Long, limit: Int, offset: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
         TEAM_TOP_SOURCES(client)
             .metadata()
             .team(teamID)
             .time(time)
             .limit(limit)
+            .offset(offset)
             .oneOfSources(sources)
             .addMetadata()
             .fetch()
@@ -517,12 +537,13 @@ class UpNutClient(config: JsonObject) {
             .collectList()
             .awaitSingleOrNull()
 
-    suspend fun teamTopNotInSources(teamID: UUID, time: Long, limit: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
+    suspend fun teamTopNotInSources(teamID: UUID, time: Long, limit: Int, offset: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
         TEAM_TOP_NOT_SOURCES(client)
             .metadata()
             .team(teamID)
             .time(time)
             .limit(limit)
+            .offset(offset)
             .oneOfSources(sources)
             .addMetadata()
             .fetch()
@@ -530,12 +551,13 @@ class UpNutClient(config: JsonObject) {
             .collectList()
             .awaitSingleOrNull()
 
-    suspend fun gameEventsBefore(gameID: UUID, time: Long, limit: Int, feedIDs: Iterable<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec) =
+    suspend fun gameEventsBefore(gameID: UUID, time: Long, limit: Int, offset: Int, feedIDs: Iterable<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec) =
         GAME_EVENT_IDS(client)
             .metadata()
             .game(gameID)
             .created(time)
             .limit(limit)
+            .offset(offset)
             .feedIDs(feedIDs)
             .addMetadata()
             .fetch()
@@ -545,7 +567,7 @@ class UpNutClient(config: JsonObject) {
             .awaitSingleOrNull()
 
     suspend fun gameHot(
-        gameID: UUID, time: Long, limit: Int,
+        gameID: UUID, time: Long, limit: Int, offset: Int,
         noneOfProviders: List<UUID>? = null,
         noneOfSources: List<UUID>? = null,
         oneOfProviders: List<UUID>? = null,
@@ -557,6 +579,7 @@ class UpNutClient(config: JsonObject) {
             .game(gameID)
             .time(time)
             .limit(limit)
+            .offset(offset)
             .noneOfProviders(noneOfProviders)
             .noneOfSources(noneOfSources)
             .oneOfProviders(oneOfProviders)
@@ -567,12 +590,13 @@ class UpNutClient(config: JsonObject) {
             .collectList()
             .awaitSingleOrNull()
 
-    suspend fun gameHotInSources(gameID: UUID, time: Long, limit: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
+    suspend fun gameHotInSources(gameID: UUID, time: Long, limit: Int, offset: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
         GAME_HOT_SOURCES(client)
             .metadata()
             .game(gameID)
             .time(time)
             .limit(limit)
+            .offset(offset)
             .oneOfSources(sources)
             .addMetadata()
             .fetch()
@@ -580,12 +604,13 @@ class UpNutClient(config: JsonObject) {
             .collectList()
             .awaitSingleOrNull()
 
-    suspend fun gameHotNotInSources(gameID: UUID, time: Long, limit: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
+    suspend fun gameHotNotInSources(gameID: UUID, time: Long, limit: Int, offset: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
         GAME_HOT_NOT_SOURCES(client)
             .metadata()
             .game(gameID)
             .time(time)
             .limit(limit)
+            .offset(offset)
             .oneOfSources(sources)
             .addMetadata()
             .fetch()
@@ -594,7 +619,7 @@ class UpNutClient(config: JsonObject) {
             .awaitSingleOrNull()
 
     suspend fun gameTop(
-        gameID: UUID, time: Long, limit: Int,
+        gameID: UUID, time: Long, limit: Int, offset: Int,
         noneOfProviders: List<UUID>? = null,
         noneOfSources: List<UUID>? = null,
         oneOfProviders: List<UUID>? = null,
@@ -606,6 +631,7 @@ class UpNutClient(config: JsonObject) {
             .game(gameID)
             .time(time)
             .limit(limit)
+            .offset(offset)
             .noneOfProviders(noneOfProviders)
             .noneOfSources(noneOfSources)
             .oneOfProviders(oneOfProviders)
@@ -616,12 +642,13 @@ class UpNutClient(config: JsonObject) {
             .collectList()
             .awaitSingleOrNull()
 
-    suspend fun gameTopInSources(gameID: UUID, time: Long, limit: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
+    suspend fun gameTopInSources(gameID: UUID, time: Long, limit: Int, offset: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
         GAME_TOP_SOURCES(client)
             .metadata()
             .game(gameID)
             .time(time)
             .limit(limit)
+            .offset(offset)
             .oneOfSources(sources)
             .addMetadata()
             .fetch()
@@ -629,12 +656,13 @@ class UpNutClient(config: JsonObject) {
             .collectList()
             .awaitSingleOrNull()
 
-    suspend fun gameTopNotInSources(gameID: UUID, time: Long, limit: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
+    suspend fun gameTopNotInSources(gameID: UUID, time: Long, limit: Int, offset: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
         GAME_TOP_NOT_SOURCES(client)
             .metadata()
             .game(gameID)
             .time(time)
             .limit(limit)
+            .offset(offset)
             .oneOfSources(sources)
             .addMetadata()
             .fetch()
@@ -642,12 +670,13 @@ class UpNutClient(config: JsonObject) {
             .collectList()
             .awaitSingleOrNull()
 
-    suspend fun playerEventsBefore(playerID: UUID, time: Long, limit: Int, feedIDs: Iterable<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec) =
+    suspend fun playerEventsBefore(playerID: UUID, time: Long, limit: Int, offset: Int, feedIDs: Iterable<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec) =
         PLAYER_EVENT_IDS(client)
             .metadata()
             .player(playerID)
             .created(time)
             .limit(limit)
+            .offset(offset)
             .feedIDs(feedIDs)
             .addMetadata()
             .fetch()
@@ -657,7 +686,7 @@ class UpNutClient(config: JsonObject) {
             .awaitSingleOrNull()
 
     suspend fun playerHot(
-        playerID: UUID, time: Long, limit: Int,
+        playerID: UUID, time: Long, limit: Int, offset: Int,
         noneOfProviders: List<UUID>? = null,
         noneOfSources: List<UUID>? = null,
         oneOfProviders: List<UUID>? = null,
@@ -669,6 +698,7 @@ class UpNutClient(config: JsonObject) {
             .player(playerID)
             .time(time)
             .limit(limit)
+            .offset(offset)
             .noneOfProviders(noneOfProviders)
             .noneOfSources(noneOfSources)
             .oneOfProviders(oneOfProviders)
@@ -679,12 +709,13 @@ class UpNutClient(config: JsonObject) {
             .collectList()
             .awaitSingleOrNull()
 
-    suspend fun playerHotInSources(playerID: UUID, time: Long, limit: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
+    suspend fun playerHotInSources(playerID: UUID, time: Long, limit: Int, offset: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
         PLAYER_HOT_SOURCES(client)
             .metadata()
             .player(playerID)
             .time(time)
             .limit(limit)
+            .offset(offset)
             .oneOfSources(sources)
             .addMetadata()
             .fetch()
@@ -692,12 +723,13 @@ class UpNutClient(config: JsonObject) {
             .collectList()
             .awaitSingleOrNull()
 
-    suspend fun playerHotNotInSources(playerID: UUID, time: Long, limit: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
+    suspend fun playerHotNotInSources(playerID: UUID, time: Long, limit: Int, offset: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
         PLAYER_HOT_NOT_SOURCES(client)
             .metadata()
             .player(playerID)
             .time(time)
             .limit(limit)
+            .offset(offset)
             .oneOfSources(sources)
             .addMetadata()
             .fetch()
@@ -706,7 +738,7 @@ class UpNutClient(config: JsonObject) {
             .awaitSingleOrNull()
 
     suspend fun playerTop(
-        playerID: UUID, time: Long, limit: Int,
+        playerID: UUID, time: Long, limit: Int, offset: Int,
         noneOfProviders: List<UUID>? = null,
         noneOfSources: List<UUID>? = null,
         oneOfProviders: List<UUID>? = null,
@@ -718,6 +750,7 @@ class UpNutClient(config: JsonObject) {
             .player(playerID)
             .time(time)
             .limit(limit)
+            .offset(offset)
             .noneOfProviders(noneOfProviders)
             .noneOfSources(noneOfSources)
             .oneOfProviders(oneOfProviders)
@@ -728,12 +761,13 @@ class UpNutClient(config: JsonObject) {
             .collectList()
             .awaitSingleOrNull()
 
-    suspend fun playerTopInSources(playerID: UUID, time: Long, limit: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
+    suspend fun playerTopInSources(playerID: UUID, time: Long, limit: Int, offset: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
         PLAYER_TOP_SOURCES(client)
             .metadata()
             .player(playerID)
             .time(time)
             .limit(limit)
+            .offset(offset)
             .oneOfSources(sources)
             .addMetadata()
             .fetch()
@@ -741,12 +775,13 @@ class UpNutClient(config: JsonObject) {
             .collectList()
             .awaitSingleOrNull()
 
-    suspend fun playerTopNotInSources(playerID: UUID, time: Long, limit: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
+    suspend fun playerTopNotInSources(playerID: UUID, time: Long, limit: Int, offset: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
         PLAYER_TOP_NOT_SOURCES(client)
             .metadata()
             .player(playerID)
             .time(time)
             .limit(limit)
+            .offset(offset)
             .oneOfSources(sources)
             .addMetadata()
             .fetch()

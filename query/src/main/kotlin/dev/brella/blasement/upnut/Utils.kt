@@ -39,6 +39,8 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import org.slf4j.Logger
+import org.springframework.r2dbc.core.await
 import java.util.*
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
@@ -157,8 +159,10 @@ suspend fun <K, V> AsyncCache<K, V>.getAsyncResult(key: K, scope: CoroutineScope
 suspend fun HttpClient.eventually(
     nuts: Map<UUID, Pair<Int, Int>>,
     upnut: UpNutClient,
+    logger: Logger,
     time: Long,
     limit: Int,
+    offset: Int,
     season: Int?,
     tournament: Int?,
     type: Int?,
@@ -169,7 +173,7 @@ suspend fun HttpClient.eventually(
     source: UUID? = null
 ): KorneaResult<List<UpNutEvent>> {
     val missingAmount = limit - nuts.size
-    val remainingList = if (missingAmount > 0) upnut.globalEventsBefore(time, missingAmount, nuts.keys) {
+    val remainingList = if (missingAmount > 0) upnut.globalEventsBefore(time, missingAmount, offset + nuts.size, nuts.keys) {
         season(season)
             .tournament(tournament)
             .type(type)
@@ -182,6 +186,7 @@ suspend fun HttpClient.eventually(
 
     return getAsResult<List<UpNutEvent>>("https://api.sibr.dev/eventually/v2/events") {
         parameter("id", feedIDs.joinToString("_or_"))
+        parameter("limit", feedIDs.size)
     }.map { list ->
         val map = list.associateBy(UpNutEvent::id)
 
@@ -192,7 +197,14 @@ suspend fun HttpClient.eventually(
 //        remainingList.mapNotNullTo(list) { uuid -> map[uuid]?.copy(nuts = JsonPrimitive(0)) }
 
         feedIDs.mapNotNull { feedID ->
-            val event = map[feedID] ?: return@mapNotNull null
+            val event = map[feedID] ?: run {
+                logger.warn("Eventually is missing {}, marking for collection", feedID)
+                upnut.client.sql("INSERT INTO metadata_collection (feed_id) VALUES ($1) ON CONFLICT DO NOTHING")
+                    .bind("$1", feedID)
+                    .await()
+
+                return@mapNotNull null
+            }
             val upnutted = upnuts[event.id]
 
             val metadata: JsonElement =

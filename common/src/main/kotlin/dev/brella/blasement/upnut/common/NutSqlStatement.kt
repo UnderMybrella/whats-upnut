@@ -9,6 +9,7 @@ import dev.brella.blasement.upnut.common.UpNutClient.Companion.GAME_VAR
 import dev.brella.blasement.upnut.common.UpNutClient.Companion.LIMIT_VAR
 import dev.brella.blasement.upnut.common.UpNutClient.Companion.NONE_OF_PROVIDERS_VAR
 import dev.brella.blasement.upnut.common.UpNutClient.Companion.NONE_OF_SOURCES_VAR
+import dev.brella.blasement.upnut.common.UpNutClient.Companion.OFFSET_VAR
 import dev.brella.blasement.upnut.common.UpNutClient.Companion.ONE_OF_PROVIDERS_VAR
 import dev.brella.blasement.upnut.common.UpNutClient.Companion.ONE_OF_SOURCES_VAR
 import dev.brella.blasement.upnut.common.UpNutClient.Companion.PHASE_VAR
@@ -28,6 +29,7 @@ class NutSqlStatement(@Language("PostgreSQL") val psql: String, val mappings: Ma
         val ALL_MAPPINGS = listOf(
             TIME_VAR,
             LIMIT_VAR,
+            OFFSET_VAR,
             ONE_OF_SOURCES_VAR,
             NONE_OF_SOURCES_VAR,
             ONE_OF_PROVIDERS_VAR,

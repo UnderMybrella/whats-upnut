@@ -102,13 +102,13 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
         nuts.client.sql("CREATE TABLE IF NOT EXISTS snow_crystals (snow_id BIGINT NOT NULL PRIMARY KEY, uuid UUID NOT NULL);")
             .await()
 
-        nuts.client.sql("CREATE TABLE IF NOT EXISTS library (id UUID NOT NULL PRIMARY KEY, chapter_title_redacted VARCHAR(128), book_title VARCHAR(128) NOT NULL, chapter_title VARCHAR(128) NOT NULL, index_in_book INT NOT NULL, redacted BOOLEAN NOT NULL DEFAULT TRUE);")
+        nuts.client.sql("CREATE TABLE IF NOT EXISTS library (id UUID NOT NULL PRIMARY KEY, chapter_title_redacted VARCHAR(128), book_title VARCHAR(128) NOT NULL, chapter_title VARCHAR(128) NOT NULL, index_in_book INT NOT NULL, redacted BOOLEAN NOT NULL DEFAULT TRUE, exists BOOLEAN NOT NULL DEFAULT TRUE);")
             .await()
 
-        nuts.client.sql("CREATE TABLE IF NOT EXISTS webhooks (id BIGSERIAL PRIMARY KEY, url VARCHAR(256) NOT NULL, subscribed_to BIGINT NOT NULL, secret_key bytea NOT NULL)")
+        nuts.client.sql("CREATE TABLE IF NOT EXISTS event_log (id BIGSERIAL PRIMARY KEY, type INT NOT NULL, data json NOT NULL, created BIGINT NOT NULL, processed BOOLEAN NOT NULL DEFAULT FALSE);")
             .await()
 
-        nuts.client.sql("CREATE TABLE IF NOT EXISTS events (id BIGSERIAL PRIMARY KEY, send_to VARCHAR(256) NOT NULL, data json NOT NULL, created BIGINT NOT NULL, sent_at BIGINT)")
+        nuts.client.sql("CREATE TABLE IF NOT EXISTS metadata_collection (feed_id UUID not null PRIMARY KEY, data json);")
             .await()
 
         nuts.client.sql("CREATE INDEX IF NOT EXISTS snow_index_uuid ON snow_crystals (uuid);")
@@ -493,6 +493,17 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
 
     val jobs = sources.map { shellSource -> launch { shellSource.processNuts(this, actor) } }
 
+    suspend fun postEvent(event: WebhookEvent, eventType: Int) {
+        val now = now()
+        val eventAsJson = io.r2dbc.postgresql.codec.Json.of(Json.encodeToString(event))
+
+        nuts.client.sql("INSERT INTO event_log ( type, data, created ) VALUES ( $1, $2, $3 )")
+            .bind("$1", eventType)
+            .bind("$2", eventAsJson)
+            .bind("$3", now)
+            .await()
+    }
+
     @OptIn(ExperimentalTime::class)
     val librarian = launch {
         initJob.join()
@@ -533,8 +544,8 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                     val chaptersUnlocked: MutableList<WebhookEvent.LibraryChapter> = ArrayList()
                     val chaptersLocked: MutableList<WebhookEvent.LibraryChapter> = ArrayList()
 
-                    books.forEach { (bookName, chapters) ->
-                        chapters.forEachIndexed { index, chapter ->
+                    books.forEachIndexed { bookIndex, (bookName, chapters) ->
+                        chapters.forEachIndexed { chapterIndex, chapter ->
                             val existing = booksReturned[chapter.id]
                             if (existing == null) {
                                 //New book just dropped
@@ -546,10 +557,10 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                     .bind("$2", bookName)
                                     .bind("$3", chapter.title)
                                     .bind("$4", chapter.redacted)
-                                    .bind("$5", index)
+                                    .bind("$5", chapterIndex)
                                     .await()
 
-                                val chapter = WebhookEvent.LibraryChapter(bookName, chapter.id, chapter.title, null, chapter.redacted)
+                                val chapter = WebhookEvent.LibraryChapter(bookName, bookIndex, chapter.id, chapter.title, null, chapterIndex, chapter.redacted)
                                 chaptersAdded.add(chapter)
                                 if (chapter.isRedacted) chaptersLocked.add(chapter)
                                 else chaptersUnlocked.add(chapter)
@@ -563,11 +574,11 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                                     .bind("$1", chapter.title)
                                     .bind("$2", existing.first)
                                     .bind("$3", chapter.redacted)
-                                    .bind("$4", index)
+                                    .bind("$4", chapterIndex)
                                     .bind("$5", chapter.id)
                                     .await()
 
-                                val chapter = WebhookEvent.LibraryChapter(bookName, chapter.id, chapter.title, existing.first, chapter.redacted)
+                                val chapter = WebhookEvent.LibraryChapter(bookName, bookIndex, chapter.id, chapter.title, existing.first, chapterIndex, chapter.redacted)
                                 if (chapter.isRedacted) chaptersLocked.add(chapter)
                                 else chaptersUnlocked.add(chapter)
                             }
@@ -586,62 +597,6 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
             }
         }
     }
-
-    suspend fun postEvent(event: WebhookEvent, eventType: Int): Job {
-        val now = now()
-
-        val eventData = Json.encodeToString(event).encodeToByteArray()
-        val eventAsJson = R2Json.of(eventData)
-
-        val statement = nuts.client.sql("INSERT INTO events ( send_to, data, created, sent_at ) VALUES ( $1, $2, $3, $4 )")
-            .bind("$2", eventAsJson)
-            .bind("$3", now)
-
-        return launch {
-            webhooksFor(eventType)
-                .map { (url, token) ->
-                    async { url to (postEventTo(url, token, eventData) is KorneaResult.Success<*>) }
-                }.awaitAll().forEach { (url, successful) ->
-                    try {
-                        statement.bind("$1", url)
-                            .bindNullable("$4", if (successful) now else null)
-                            .await()
-                    } catch (th: Throwable) {
-                        th.printStackTrace()
-                    }
-                }
-        }
-    }
-
-    suspend inline fun postEventTo(url: String, token: ByteArray, eventData: ByteArray): KorneaResult<Unit> {
-        val sig = Mac.getInstance("HmacSHA256")
-            .apply { init(SecretKeySpec(token, "HmacSHA256")) }
-            .doFinal(eventData)
-            .let(::hex)
-
-        return http.postAsResult<Unit>(url) {
-            header("X-UpNut-Signature", sig)
-
-            body = ByteArrayContent(eventData, contentType = ContentType.Application.Json)
-        }
-    }
-
-    suspend fun webhooksFor(eventType: Int): List<Pair<String, ByteArray>> =
-        nuts.client.sql("SELECT url, secret_key FROM webhooks WHERE subscribed_to & $1 = $1")
-            .bind("$1", eventType)
-            .map { row ->
-                Pair(
-                    row["url"] as String, when (val secretKey = row["secret_key"]) {
-                        is ByteBuffer -> ByteArray(secretKey.remaining()).also(secretKey::get)
-                        is ByteArray -> secretKey
-                        else -> return@map null
-                    }
-                )
-            }
-            .all()
-            .collectList()
-            .awaitFirstOrNull()
-            ?.filterNotNull() ?: emptyList()
 
     inner class NutBuilder {
         suspend inline fun players(event: UpNutEvent) {
@@ -819,10 +774,22 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
 
         @OptIn(ExperimentalTime::class)
         suspend inline fun metadata(events: List<UpNutEvent>) {
+            val missingData = nuts.client.sql("SELECT feed_id FROM metadata_collection WHERE feed_id = ANY($1) AND data IS NULL")
+                               .bind("$1", Array(events.size) { events[it].id })
+                               .map { row -> row.getValue<UUID>("feed_id") }
+                               .all()
+                               .collectList()
+                               .awaitFirstOrNull()
+                           ?: emptyList()
+
             nuts.client.inConnectionAwait { connection ->
                 events.chunked(100).forEach { chunk ->
                     val statement =
                         connection.createStatement("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( \$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8 ) ON CONFLICT DO NOTHING")
+
+                    val missingInsertStatement =
+                        connection.createStatement("UPDATE metadata_collection SET data = $2 WHERE feed_id = $1")
+                    var missingInsertCount = 0
 
                     chunk.forEach { event ->
                         statement
@@ -835,9 +802,20 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                             .bind("$7", event.phase)
                             .bind("$8", event.category)
                             .add()
+
+                        if (event.id in missingData) {
+                            ingestLogger.warn("Collecting missing event {}", event.id)
+
+                            missingInsertStatement.bind("$1", event.id)
+                            missingInsertStatement.bind("$2", io.r2dbc.postgresql.codec.Json.of(Json.encodeToString(event)))
+                            missingInsertStatement.add()
+
+                            missingInsertCount++
+                        }
                     }
 
                     statement.awaitRowsUpdated()
+                    if (missingInsertCount > 0) missingInsertStatement.awaitRowsUpdated()
                 }
             }
         }
@@ -1513,56 +1491,6 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient) : CoroutineS
                 }
             }
         }*/
-    }
-
-    data class ResendEvent(val id: Long, val sendTo: String, val data: ByteArray, val created: DateTimeTz) {
-        constructor(row: Row) : this(row.getValue("id"), row.getValue("send_to"), row.getValue("data"), DateTime.fromUnix(row.getValue<Long>("created")).utc)
-    }
-
-    @OptIn(ExperimentalTime::class)
-    val resendJob = launch {
-        initJob.join()
-
-        val logger = LoggerFactory.getLogger("dev.brella.blasement.upnut.ingest.Resend")
-
-        val limit = getIntInScope("resend", "limit", 100)
-        val loopEvery = getIntInScope("resend", "loop_duration_s", 60 * 30)
-        val delay = getLongInScope("resend", "delay_ms", 100)
-        val delayOnFailure = getLongInScope("resend", "delay_on_failure_ms", 100)
-        val totalLimit = getLongInScope("resend", "total_limit", Long.MAX_VALUE)
-
-        loopEvery(loopEvery.seconds, `while` = { isActive }) {
-            val eventsToDeliver = nuts.client.sql("SELECT id, send_to, data, created FROM events WHERE sent_at IS NULL")
-                                      .map(::ResendEvent)
-                                      .all()
-                                      .collectList()
-                                      .awaitFirstOrNull()
-                                      ?.groupBy(ResendEvent::sendTo) ?: return@loopEvery
-
-            logger.info("Resending {} events", eventsToDeliver.size)
-
-            val tokens = eventsToDeliver.keys.associateWith { url ->
-                nuts.client.sql("SELECT secret_key FROM webhooks WHERE url = $1")
-                    .bind("$1", url)
-                    .map { row -> row.getValue<ByteArray>("secret_key") }
-                    .first()
-                    .awaitFirstOrNull()
-            }
-
-            eventsToDeliver.forEach outer@{ (url, eventList) ->
-                val token = tokens[url] ?: return@outer
-                eventList.forEach { event ->
-                    if (postEventTo(url, token, event.data) is KorneaResult.Success) {
-                        nuts.client.sql("UPDATE events SET sent_at = $1 WHERE id = $2")
-                            .bind("$1", now())
-                            .bind("$2", event.id)
-                            .await()
-                    } else {
-                        return@outer
-                    }
-                }
-            }
-        }
     }
 
     suspend fun join() {
