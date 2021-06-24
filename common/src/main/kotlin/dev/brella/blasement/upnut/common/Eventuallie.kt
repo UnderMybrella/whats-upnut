@@ -88,7 +88,7 @@ class Eventuallie(config: JsonObject) {
             .bind("$1", feedIDs)
             .map { row -> row.getValue<UUID>("doc_id") to row.getValue<String>("object") }
             .all()
-            .collectMap(Pair<UUID, String>::first) { (_, second) -> Json.decodeFromString<UpNutEvent>(second) }
+            .collectMap(Pair<UUID, String>::first) { (_, second) -> Json.decodeFromString<EventuallieEvent>(second).toUpNutEvent() }
             .awaitFirstOrNull() ?: emptyMap()
 
     suspend fun mergeFeedWithNuts(

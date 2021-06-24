@@ -8,6 +8,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.nullable
 import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
@@ -42,6 +44,46 @@ data class UpNutEvent(
                 JsonObject(json.plus("scales" to value))
             } ?: metadata
         }
+}
+
+object UnixTimestampSerialiser: KSerializer<Instant> {
+    override val descriptor: SerialDescriptor = PrimitiveSerialDescriptor("UnixTimestamp", PrimitiveKind.LONG)
+
+    override fun deserialize(decoder: Decoder): Instant =
+        Instant.fromEpochSeconds(decoder.decodeLong())
+
+    override fun serialize(encoder: Encoder, value: Instant) {
+        encoder.encodeLong(value.epochSeconds)
+    }
+}
+
+@Serializable
+data class EventuallieEvent(
+    val id: @Serializable(UUIDSerialiser::class) UUID,
+    val playerTags: @Serializable(UUIDListSerialiser::class) List<@Serializable(UUIDSerialiser::class) UUID>?,
+    val teamTags: @Serializable(UUIDListSerialiser::class) List<@Serializable(UUIDSerialiser::class) UUID>?,
+    val gameTags: @Serializable(UUIDListSerialiser::class) List<@Serializable(UUIDSerialiser::class) UUID>?,
+    val created: @Serializable(UnixTimestampSerialiser::class) Instant,
+    val season: Int,
+    val tournament: Int,
+    val type: Int,
+    val day: Int,
+    val phase: Int,
+    val category: Int,
+    val description: String,
+    var nuts: JsonPrimitive = JsonNull,
+//    var scales: JsonPrimitive = JsonNull,
+    var metadata: JsonElement
+) {
+    var scales: JsonPrimitive
+        get() = (metadata as? JsonObject)?.get("scales") as? JsonPrimitive ?: JsonNull
+        set(value) {
+            metadata = (metadata as? JsonObject)?.let { json ->
+                JsonObject(json.plus("scales" to value))
+            } ?: metadata
+        }
+
+    inline fun toUpNutEvent() = UpNutEvent(id, playerTags, teamTags, gameTags, created, season, tournament, type, day, phase, category, description, nuts, metadata)
 }
 
 @Serializable
