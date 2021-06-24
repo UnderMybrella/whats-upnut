@@ -73,7 +73,7 @@ class WhatsUpNut {
 
     val configJson: JsonObject? = File(System.getProperty("upnut.query") ?: "upnut.json").takeIf(File::exists)?.readText()?.let(Json::decodeFromString)
     val upnut = UpNutClient(configJson?.getJsonObjectOrNull("upnuts_r2dbc") ?: File(System.getProperty("upnut.r2dbc") ?: "r2dbc.json").readText().let(Json::decodeFromString))
-    val eventuallie = Eventuallie(configJson?.getJsonObjectOrNull("eventually_r2dbc") ?: File(System.getProperty("upnut.r2dbc") ?: "r2dbc.json").readText().let(Json::decodeFromString))
+    val eventuallie = Eventuallie(configJson?.getJsonObjectOrNull("eventually_r2dbc") ?: File(System.getProperty("upnut.eventually") ?: "eventually-r2dbc.json").readText().let(Json::decodeFromString))
 
     val http = HttpClient(OkHttp) {
         installGranularHttp()

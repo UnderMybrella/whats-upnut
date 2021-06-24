@@ -1,5 +1,5 @@
 {
-  "url": "r2dbc:pool:postgresql://eventually_db:5432/eventually",
+  "url": "r2dbc:pool:postgresql://eventually_db/eventually",
   "user": "upnuts",
   "password": "a"
 }
