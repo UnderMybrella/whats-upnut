@@ -72,7 +72,7 @@ class WhatsUpNut {
     }
 
     val configJson: JsonObject? = File(System.getProperty("upnut.query") ?: "upnut.json").takeIf(File::exists)?.readText()?.let(Json::decodeFromString)
-    val upnut = UpNutClient(configJson?.getJsonObjectOrNull("upnuts_r2dbc") ?: File(System.getProperty("upnut.r2dbc") ?: "r2dbc.json").readText().let(Json::decodeFromString))
+    val upnut = UpNutClient(configJson?.getJsonObjectOrNull("upnuts_r2dbc") ?: File(System.getProperty("upnut.r2dbc") ?: "upnuts-r2dbc.json").readText().let(Json::decodeFromString))
     val eventuallie = Eventuallie(configJson?.getJsonObjectOrNull("eventually_r2dbc") ?: File(System.getProperty("upnut.eventually") ?: "eventually-r2dbc.json").readText().let(Json::decodeFromString))
 
     val http = HttpClient(OkHttp) {
@@ -241,6 +241,7 @@ class WhatsUpNut {
             try {
                 KorneaResult.success(eventuallie.mergeFeedWithNuts(nuts, upnut, logger, time, limit, offset, season, tournament, type, day, phase, category, provider, source))
             } catch (th: Throwable) {
+                th.printStackTrace()
                 KorneaResult.thrown(th)
             }
         }.respond(call)

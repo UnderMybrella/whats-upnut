@@ -63,7 +63,7 @@ data class EventuallieEvent(
     val playerTags: @Serializable(UUIDListSerialiser::class) List<@Serializable(UUIDSerialiser::class) UUID>?,
     val teamTags: @Serializable(UUIDListSerialiser::class) List<@Serializable(UUIDSerialiser::class) UUID>?,
     val gameTags: @Serializable(UUIDListSerialiser::class) List<@Serializable(UUIDSerialiser::class) UUID>?,
-    val created: @Serializable(UnixTimestampSerialiser::class) Instant,
+    val created: Long,
     val season: Int,
     val tournament: Int,
     val type: Int,
@@ -83,7 +83,7 @@ data class EventuallieEvent(
             } ?: metadata
         }
 
-    inline fun toUpNutEvent() = UpNutEvent(id, playerTags, teamTags, gameTags, created, season, tournament, type, day, phase, category, description, nuts, metadata)
+    inline fun toUpNutEvent() = UpNutEvent(id, playerTags, teamTags, gameTags, Instant.fromEpochSeconds(created), season, tournament, type, day, phase, category, description, nuts, metadata)
 }
 
 @Serializable

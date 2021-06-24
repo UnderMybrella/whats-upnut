@@ -1,4 +1,4 @@
 
 rootProject.name = "upnut"
 
-include(":ingest", ":query", ":common")
+include(":events", ":ingest", ":query", ":common")
