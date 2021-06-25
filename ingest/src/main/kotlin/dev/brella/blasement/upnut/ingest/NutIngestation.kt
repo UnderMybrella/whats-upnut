@@ -663,7 +663,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
                         chapters.forEachIndexed { chapterIndex, chapter ->
                             val existing = booksReturned[chapter.id]
 
-                            nuts.client.sql("INSERT INTO library (id, book_title, book_index, chapter_title, redacted, index_in_book) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO UPDATE SET book_title = $2, book_index = $3, chapter_title = $4, redacted = $5, index_in_book = $6")
+                            nuts.client.sql("INSERT INTO library (id, book_title, book_index, chapter_title, redacted, index_in_book, exists) VALUES ($1, $2, $3, $4, $5, $6, TRUE) ON CONFLICT (id) DO UPDATE SET book_title = $2, book_index = $3, chapter_title = $4, redacted = $5, index_in_book = $6, exists = TRUE")
                                 .bind("$1", chapter.id)
                                 .bind("$2", bookName)
                                 .bind("$3", bookIndex)
