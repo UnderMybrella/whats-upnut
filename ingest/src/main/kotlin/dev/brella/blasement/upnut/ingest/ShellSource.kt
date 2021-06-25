@@ -10,6 +10,8 @@ import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.statement.*
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.channels.actor
 import kotlinx.coroutines.delay
@@ -23,7 +25,9 @@ import org.springframework.r2dbc.core.DatabaseClient
 import java.time.Clock
 import java.time.Instant
 import java.util.*
+import java.util.concurrent.Executors
 import kotlin.collections.HashMap
+import kotlin.coroutines.CoroutineContext
 import kotlin.time.Duration
 import kotlin.time.ExperimentalTime
 
@@ -188,29 +192,6 @@ public interface ShellSource {
             val etags: MutableMap<Int, String> = HashMap()
             val shouldTrim = sortBy == BLASEBALL_SORTING_HOT || sortBy == BLASEBALL_SORTING_TOP
 
-            val metadataAdjustment = actor<Pair<String, List<UpNutEvent>>> {
-                receiveAsFlow()
-                    .onEach { (storyID, list) ->
-                        databaseClient.inConnectionAwait { connection ->
-                            if (list.isEmpty()) return@inConnectionAwait
-
-                            val statement =
-                                connection.createStatement("INSERT INTO storytime (feed_id, story_id) VALUES ( \$1, \$2 ) ON CONFLICT DO NOTHING")
-
-                            val storyUUID = UUID.fromString(storyID)
-
-                            list.forEach { event ->
-                                statement.bind("$1", event.id)
-                                    .bind("$2", storyUUID)
-                                    .add()
-                            }
-
-                            statement.awaitRowsUpdated()
-                        }
-                    }.launchIn(this)
-                    .join()
-            }
-
             loopEvery(loopEvery, `while` = { isActive }) {
                 try {
                     val storyList = databaseClient.sql("SELECT id FROM library WHERE redacted = FALSE")
@@ -238,7 +219,7 @@ public interface ShellSource {
                                     .trimIf(shouldTrim)
 
                                 mailbox.send(Pair(now, list))
-                                metadataAdjustment.send(Pair(story, list))
+//                                metadataAdjustment.send(Pair(story, list))
 
                                 if (list.size < limit) break
 

@@ -17,6 +17,8 @@ sealed class WebhookEvent {
 
         const val THRESHOLD_PASSED_NUTS = 1 shl 4
         const val THRESHOLD_PASSED_SCALES = 1 shl 5
+
+        const val LIBRARY_CHAPTER_REMOVED = 1 shl 6
     }
 
     @Serializable
@@ -37,6 +39,10 @@ sealed class WebhookEvent {
     @Serializable
     @SerialName("LIBRARY_CHAPTERS_UNREDACTED")
     data class LibraryChaptersUnredacted(val chapters: List<LibraryChapter>): WebhookEvent()
+
+    @Serializable
+    @SerialName("LIBRARY_CHAPTERS_REMOVED")
+    data class LibraryChaptersRemoved(val chapters: List<LibraryChapter>): WebhookEvent()
 
     @Serializable
     @SerialName("THRESHOLD_PASSED_NUTS")

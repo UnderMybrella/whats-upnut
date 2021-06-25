@@ -340,7 +340,7 @@ class WhatsUpNut {
     fun routing(routing: Routing) =
         with(routing) {
             get("/library") {
-                val books = upnut.client.sql("SELECT id, chapter_title_redacted, chapter_title, book_title, book_index, index_in_book, redacted FROM library WHERE exists = TRUE SORT BY book_index, index_in_book").map { row ->
+                val books = upnut.client.sql("SELECT id, chapter_title_redacted, chapter_title, book_title, book_index, index_in_book, redacted FROM library WHERE exists = TRUE ORDER BY book_index, index_in_book").map { row ->
                     (row["id"] as? UUID)?.let { uuid ->
                         Pair(
                             row["book_title"] as? String,
@@ -380,7 +380,7 @@ class WhatsUpNut {
 
                 call.respond(stories)
             }
-            get("/library/chapter_for_events/{feed_id}/redirect") {
+            get("/library/chapter_for_event/{feed_id}/redirect") {
                 val uuid = call.parameters.getOrFail("feed_id")
                 val pair = upnut.client.sql("SELECT book_index, index_in_book FROM library WHERE id = (SELECT story_id FROM storytime WHERE feed_id = $1 LIMIT 1)")
                     .bind("$1", UUID.fromString(uuid))
@@ -389,7 +389,7 @@ class WhatsUpNut {
 
                 if (pair == null) {
                     call.respondJsonObject(HttpStatusCode.BadRequest) {
-                        "error" to "$uuid does not have a story"
+                        put("error", "$uuid does not have a story")
                     }
                 } else {
                     call.respondRedirect("https://www.blaseball.com/library/${pair.first}/${pair.second + 1}", false)

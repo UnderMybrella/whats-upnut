@@ -112,13 +112,13 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
         nuts.client.sql("CREATE TABLE IF NOT EXISTS storytime (feed_id UUID NOT NULL PRIMARY KEY, story_id UUID NOT NULL)")
             .await()
 
-        try {
-            nuts.client.sql("ALTER TABLE library ADD COLUMN book_index INT NOT NULL DEFAULT 0")
-                .await()
-        } catch (th: Throwable) {
-            println("Already altered library")
-            th.printStackTrace()
-        }
+//        try {
+//            nuts.client.sql("ALTER TABLE library ADD COLUMN exists BOOLEAN NOT NULL DEFAULT false")
+//                .await()
+//        } catch (th: Throwable) {
+//            println("Already altered library")
+//            th.printStackTrace()
+//        }
 
 //        nuts.client.sql("ALTER TABLE metadata_collection ADD COLUMN cleared BOOLEAN NOT NULL DEFAULT FALSE")
 //            .await()
@@ -496,6 +496,29 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
     suspend inline fun sendToFinally(list: List<UpNutEvent>) =
         finallyActor.send(list)
 
+/*    val metadataAdjustment = ShellSource.Librarian.actor<Pair<String, List<UpNutEvent>>> {
+        receiveAsFlow()
+            .onEach { (storyID, list) ->
+                databaseClient.inConnectionAwait { connection ->
+                    if (list.isEmpty()) return@inConnectionAwait
+
+                    val statement =
+                        connection.createStatement("INSERT INTO storytime (feed_id, story_id) VALUES ( \$1, \$2 ) ON CONFLICT DO NOTHING")
+
+                    val storyUUID = UUID.fromString(storyID)
+
+                    list.forEach { event ->
+                        statement.bind("$1", event.id)
+                            .bind("$2", storyUUID)
+                            .add()
+                    }
+
+                    statement.awaitRowsUpdated()
+                }
+            }.launchIn(this)
+            .join()
+    }*/
+
     @OptIn(ObsoleteCoroutinesApi::class, ExperimentalTime::class)
     val actor = actor<Pair<Long, List<UpNutEvent>>> {
         var lastTime: Long = now()
@@ -571,7 +594,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
 
     val jobs = sources.map { shellSource -> launch { shellSource.processNuts(this, actor) } }
 
-    suspend fun postEvent(event: WebhookEvent, eventType: Int) {
+    fun postEvent(event: WebhookEvent, eventType: Int) = launch {
         val now = now()
         val eventAsJson = io.r2dbc.postgresql.codec.Json.of(Json.encodeToString(event))
 
@@ -610,11 +633,19 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
                     val books = Json.decodeFromString<List<LibraryBook>>(response.receive<String>())
 
                     val booksReturned =
-                        nuts.client.sql("SELECT id, chapter_title, redacted FROM library WHERE exists = TRUE")
+                        nuts.client.sql("SELECT id, book_title, book_index, chapter_title, chapter_title_redacted, index_in_book, redacted FROM library WHERE exists = TRUE")
                             .map { row ->
                                 Pair(
                                     row.getValue<UUID>("id"),
-                                    Pair(row.getValue<String>("chapter_title"), row.get<Boolean>("redacted"))
+                                    WebhookEvent.LibraryChapter(
+                                        bookName = row.getValue<String>("book_title"),
+                                        bookIndex = row.getValue<Int>("book_index"),
+                                        chapterUUID = row.getValue<UUID>("id"),
+                                        chapterName = row.get<String>("chapter_title"),
+                                        chapterNameRedacted = row.get<String>("chapter_title_redacted"),
+                                        chapterIndex = row.getValue<Int>("index_in_book"),
+                                        isRedacted = row.getValue<Boolean>("redacted")
+                                    )
                                 )
                             }.all()
                             .collectList()
@@ -626,6 +657,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
                     val chaptersAdded: MutableList<WebhookEvent.LibraryChapter> = ArrayList()
                     val chaptersUnlocked: MutableList<WebhookEvent.LibraryChapter> = ArrayList()
                     val chaptersLocked: MutableList<WebhookEvent.LibraryChapter> = ArrayList()
+                    val chaptersRemoved: MutableList<WebhookEvent.LibraryChapter> = ArrayList()
 
                     books.forEachIndexed { bookIndex, (bookName, chapters) ->
                         chapters.forEachIndexed { chapterIndex, chapter ->
@@ -650,11 +682,11 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
                                 if (chapter.isRedacted) chaptersLocked.add(chapter)
                                 else chaptersUnlocked.add(chapter)
 
-                            } else if (chapter.redacted != existing.second) {
+                            } else if (chapter.redacted != existing.isRedacted) {
                                 //Book is now unredacted! -- Right ?
-                                logger.info("Book has shifted redactivity: {} -> {}, {} -> {}", existing.first, chapter.title, existing.second, chapter.redacted)
+                                logger.info("Book has shifted redactivity: {} -> {}, {} -> {}", existing.chapterName, chapter.title, existing.isRedacted, chapter.redacted)
 
-                                val chapter = WebhookEvent.LibraryChapter(bookName, bookIndex, chapter.id, chapter.title, existing.first, chapterIndex, chapter.redacted)
+                                val chapter = WebhookEvent.LibraryChapter(bookName, bookIndex, chapter.id, chapter.title, existing.chapterName, chapterIndex, chapter.redacted)
                                 if (chapter.isRedacted) chaptersLocked.add(chapter)
                                 else chaptersUnlocked.add(chapter)
                             }
@@ -662,15 +694,16 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
                     }
 
                     val allExistingChapters = books.flatMap(LibraryBook::chapters).map(LibraryBookChapter::id)
-                    booksReturned.forEach { (chapterID, pair) ->
-                        if (chapterID !in allExistingChapters) {
-                            logger.warn("Chapter has been removed: {} / {}", pair.first, pair.second)
+                    booksReturned.values.forEach { chapter ->
+                        if (chapter.chapterUUID !in allExistingChapters) {
+                            logger.warn("Chapter has been removed: {}", chapter)
 
                             nuts.client.sql("UPDATE library SET exists = FALSE WHERE id = $1")
-                                .bind("$1", chapterID)
+                                .bind("$1", chapter.chapterUUID)
                                 .await()
 
                             //chaptersRemoved.add(WebhookEvent.ChapterRemoved()
+                            chaptersRemoved.add(chapter)
                         }
                     }
 
@@ -680,6 +713,8 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
                         postEvent(WebhookEvent.LibraryChaptersRedacted(chaptersLocked), WebhookEvent.LIBRARY_CHAPTERS_REDACTED)
                     if (chaptersUnlocked.isNotEmpty())
                         postEvent(WebhookEvent.LibraryChaptersUnredacted(chaptersUnlocked), WebhookEvent.LIBRARY_CHAPTERS_UNREDACTED)
+                    if (chaptersRemoved.isNotEmpty())
+                        postEvent(WebhookEvent.LibraryChaptersRemoved(chaptersRemoved), WebhookEvent.LIBRARY_CHAPTER_REMOVED)
                 }
             } catch (th: Throwable) {
                 th.printStackTrace()
@@ -1011,6 +1046,8 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
 
                                 chunk.forEach { event ->
                                     val atTimeOfRecording = atTimeOfRecordingMap[event.id]
+
+                                    val eventNuts = event.nuts.intOrNull
                                     val nutsDifference = event.nuts.intOrNull - atTimeOfRecording?.first
                                     if (nutsDifference != null && nutsDifference > 0) {
                                         nutCount++
@@ -1021,11 +1058,10 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
                                             .bind("$4", time)
                                             .add()
 
-                                        val missing = NUTS_THRESHOLD - atTimeOfRecording?.first
-
-                                        if (missing in 1 until nutsDifference) launch { postEvent(WebhookEvent.ThresholdPassedNuts(NUTS_THRESHOLD, time, event), WebhookEvent.THRESHOLD_PASSED_NUTS) }
+                                        if (eventNuts!! >= NUTS_THRESHOLD) postEvent(WebhookEvent.ThresholdPassedNuts(NUTS_THRESHOLD, time, event), WebhookEvent.THRESHOLD_PASSED_NUTS)
                                     }
 
+                                    val eventScales = event.scales.intOrNull
                                     val scalesDifference = event.scales.intOrNull - atTimeOfRecording?.second
                                     if (scalesDifference != null && scalesDifference > 0) {
                                         scaleCount++
@@ -1037,10 +1073,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
                                             .bind("$4", time)
                                             .add()
 
-                                        //We don't know the threshold for scales (or even how they work); making an educated guess
-                                        val missing = SCALES_THRESHOLD - atTimeOfRecording?.second
-
-                                        if (missing in 1 until scalesDifference) launch { postEvent(WebhookEvent.ThresholdPassedScales(SCALES_THRESHOLD, time, event), WebhookEvent.THRESHOLD_PASSED_SCALES) }
+                                        if (eventScales!! >= SCALES_THRESHOLD) postEvent(WebhookEvent.ThresholdPassedScales(SCALES_THRESHOLD, time, event), WebhookEvent.THRESHOLD_PASSED_SCALES)
                                     }
                                 }
 
