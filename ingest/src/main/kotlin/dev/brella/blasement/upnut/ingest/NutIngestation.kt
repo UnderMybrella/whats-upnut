@@ -993,7 +993,8 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
                 .awaitFirstOrNull()
 
             val eventNuts = event.nuts.intOrNull
-            val nutsDifference = eventNuts - atTimeOfRecording?.first
+            val recordingNuts = atTimeOfRecording?.first
+            val nutsDifference = eventNuts - recordingNuts
             if (nutsDifference != null && nutsDifference > 0) {
                 nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                     .bind("$1", nutsDifference)
@@ -1002,11 +1003,13 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
                     .bind("$4", time)
                     .await()
 
-                if (eventNuts!! >= NUTS_THRESHOLD) postEvent(WebhookEvent.ThresholdPassedNuts(NUTS_THRESHOLD, time, event), WebhookEvent.THRESHOLD_PASSED_NUTS)
+                if ((recordingNuts == null || recordingNuts < NUTS_THRESHOLD) && eventNuts!! >= NUTS_THRESHOLD) postEvent(WebhookEvent.ThresholdPassedNuts(NUTS_THRESHOLD, time, event), WebhookEvent.THRESHOLD_PASSED_NUTS)
             }
 
             val eventScales = event.scales.intOrNull
-            val scalesDifference = eventScales - atTimeOfRecording?.second
+            val recordingScales = atTimeOfRecording?.second
+
+            val scalesDifference = eventScales - recordingScales
             if (scalesDifference != null && scalesDifference > 0) {
                 nuts.client.sql("INSERT INTO upnuts (scales, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                     .bind("$1", scalesDifference)
@@ -1015,7 +1018,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
                     .bind("$4", time)
                     .await()
 
-                if (eventScales!! >= SCALES_THRESHOLD) postEvent(WebhookEvent.ThresholdPassedScales(SCALES_THRESHOLD, time, event), WebhookEvent.THRESHOLD_PASSED_SCALES)
+                if ((recordingScales == null || recordingScales <= SCALES_THRESHOLD) && eventScales!! >= SCALES_THRESHOLD) postEvent(WebhookEvent.ThresholdPassedScales(SCALES_THRESHOLD, time, event), WebhookEvent.THRESHOLD_PASSED_SCALES)
             }
 
             return atTimeOfRecording
@@ -1048,7 +1051,9 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
                                     val atTimeOfRecording = atTimeOfRecordingMap[event.id]
 
                                     val eventNuts = event.nuts.intOrNull
-                                    val nutsDifference = event.nuts.intOrNull - atTimeOfRecording?.first
+                                    val recordingNuts = atTimeOfRecording?.first
+
+                                    val nutsDifference = event.nuts.intOrNull - recordingNuts
                                     if (nutsDifference != null && nutsDifference > 0) {
                                         nutCount++
                                         insertNuts
@@ -1058,11 +1063,17 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
                                             .bind("$4", time)
                                             .add()
 
-                                        if (eventNuts!! >= NUTS_THRESHOLD) postEvent(WebhookEvent.ThresholdPassedNuts(NUTS_THRESHOLD, time, event), WebhookEvent.THRESHOLD_PASSED_NUTS)
+                                        if ((recordingNuts == null || recordingNuts < NUTS_THRESHOLD) && eventNuts!! >= NUTS_THRESHOLD)
+                                            postEvent(
+                                                WebhookEvent.ThresholdPassedNuts(NUTS_THRESHOLD, time, event),
+                                                WebhookEvent.THRESHOLD_PASSED_NUTS
+                                            )
                                     }
 
                                     val eventScales = event.scales.intOrNull
-                                    val scalesDifference = event.scales.intOrNull - atTimeOfRecording?.second
+                                    val recordingScales = atTimeOfRecording?.second
+
+                                    val scalesDifference = event.scales.intOrNull - recordingScales
                                     if (scalesDifference != null && scalesDifference > 0) {
                                         scaleCount++
 
@@ -1073,7 +1084,11 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
                                             .bind("$4", time)
                                             .add()
 
-                                        if (eventScales!! >= SCALES_THRESHOLD) postEvent(WebhookEvent.ThresholdPassedScales(SCALES_THRESHOLD, time, event), WebhookEvent.THRESHOLD_PASSED_SCALES)
+                                        if ((recordingScales == null || recordingScales < SCALES_THRESHOLD) && eventScales!! >= SCALES_THRESHOLD)
+                                            postEvent(
+                                                WebhookEvent.ThresholdPassedScales(SCALES_THRESHOLD, time, event),
+                                                WebhookEvent.THRESHOLD_PASSED_SCALES
+                                            )
                                     }
                                 }
 
