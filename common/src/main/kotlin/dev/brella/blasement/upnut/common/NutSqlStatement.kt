@@ -53,6 +53,8 @@ class NutSqlStatement(@Language("PostgreSQL") val psql: String, val mappings: Ma
             UUID_VAR
         )
 
+        inline operator fun invoke(builder: StringBuilder.() -> Unit): NutSqlStatement =
+            invoke(buildString(builder))
         operator fun invoke(@Language("PostgreSQL") psql: String): NutSqlStatement {
             var index = 1
             val mapping: MutableMap<String, String> = HashMap()

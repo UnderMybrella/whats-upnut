@@ -10,7 +10,13 @@ import kotlin.time.measureTime
 @OptIn(ExperimentalTime::class)
 suspend fun <T> T.loopEvery(time: Duration, `while`: suspend T.() -> Boolean, block: suspend () -> Unit) {
     while (`while`()) {
-        val timeTaken = measureTime { block() }
+        val timeTaken = measureTime {
+            try {
+                block()
+            } catch (th: Throwable) {
+                th.printStackTrace()
+            }
+        }
 //        println("Took ${timeTaken.inSeconds}s, waiting ${(time - timeTaken).inSeconds}s")
         delay((time - timeTaken).toLongMilliseconds().coerceAtLeast(0L))
     }

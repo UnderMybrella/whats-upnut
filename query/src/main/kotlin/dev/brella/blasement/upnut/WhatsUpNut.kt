@@ -47,6 +47,8 @@ import org.slf4j.LoggerFactory
 import org.slf4j.event.Level
 import org.springframework.r2dbc.core.DatabaseClient
 import org.springframework.r2dbc.core.await
+import org.springframework.r2dbc.core.awaitOne
+import org.springframework.r2dbc.core.awaitOneOrNull
 import org.springframework.r2dbc.core.awaitRowsUpdated
 import org.springframework.r2dbc.core.awaitSingleOrNull
 import org.springframework.r2dbc.core.bind as bindNullable
@@ -338,7 +340,7 @@ class WhatsUpNut {
     fun routing(routing: Routing) =
         with(routing) {
             get("/library") {
-                val books = upnut.client.sql("SELECT id, chapter_title_redacted, chapter_title, book_title, index_in_book, redacted FROM library").map { row ->
+                val books = upnut.client.sql("SELECT id, chapter_title_redacted, chapter_title, book_title, book_index, index_in_book, redacted FROM library WHERE exists = TRUE SORT BY book_index, index_in_book").map { row ->
                     (row["id"] as? UUID)?.let { uuid ->
                         Pair(
                             row["book_title"] as? String,
@@ -361,6 +363,37 @@ class WhatsUpNut {
                             ?: emptyList()
 
                 call.respond(books)
+            }
+            get("/library/chapter_for_events") {
+                val eventIDs = call.request.queryParameters.run {
+                    (get("id") ?: get("ids"))?.split(',')
+                } ?: emptyList()
+
+                val stories = upnut.client.sql("SELECT feed_id, story_id FROM storytime WHERE feed_id = ANY($1)")
+                                  .bind("$1", Array(eventIDs.size) { UUID.fromString(eventIDs[it]) })
+                                  .map { row -> row.getValue<UUID>("feed_id").toString() to row.getValue<UUID>("story_id").toString() }
+                                  .all()
+                                  .collectList()
+                                  .awaitFirstOrNull()
+                                  ?.groupBy(Pair<String, String>::second, Pair<String, String>::first)
+                              ?: emptyMap()
+
+                call.respond(stories)
+            }
+            get("/library/chapter_for_events/{feed_id}/redirect") {
+                val uuid = call.parameters.getOrFail("feed_id")
+                val pair = upnut.client.sql("SELECT book_index, index_in_book FROM library WHERE id = (SELECT story_id FROM storytime WHERE feed_id = $1 LIMIT 1)")
+                    .bind("$1", UUID.fromString(uuid))
+                    .map { row -> Pair(row.getValue<Int>("book_index"), row.getValue<Int>("index_in_book")) }
+                    .awaitOneOrNull()
+
+                if (pair == null) {
+                    call.respondJsonObject(HttpStatusCode.BadRequest) {
+                        "error" to "$uuid does not have a story"
+                    }
+                } else {
+                    call.respondRedirect("https://www.blaseball.com/library/${pair.first}/${pair.second + 1}", false)
+                }
             }
 
             route("/gc") {
@@ -396,6 +429,33 @@ class WhatsUpNut {
                         ?: emptyList()
                     )
                 }
+            }
+
+            get("/upstream") {
+                val type = call.request.queryParameters["type"]?.toIntOrNull()
+                val offset = call.request.queryParameters["offset"]
+
+                val events: List<JsonElement>
+                if (type == null) {
+                    events = upnut.client.sql("SELECT data FROM event_log ORDER BY created DESC LIMIT 100 OFFSET $1")
+                        .bind("$1", offset?.toIntOrNull() ?: 0)
+                        .map { row -> row.getValue<String>("data") }
+                        .all()
+                        .collectList()
+                        .awaitFirstOrNull()
+                        ?.map(Json::parseToJsonElement) ?: emptyList()
+                } else {
+                    events = upnut.client.sql("SELECT data FROM event_log WHERE type = $1 ORDER BY created DESC LIMIT 100 OFFSET $2")
+                                 .bind("$1", type)
+                                 .bind("$2", offset?.toIntOrNull() ?: 0)
+                                 .map { row -> row.getValue<String>("data") }
+                                 .all()
+                                 .collectList()
+                                 .awaitFirstOrNull()
+                                 ?.map(Json::parseToJsonElement) ?: emptyList()
+                }
+
+                call.respond(events)
             }
 
             put("/{feed_id}/{provider}") {
@@ -541,7 +601,6 @@ class WhatsUpNut {
                             val upnutted = upnuts[event.id]
                             val metadata: JsonElement =
                                 if (upnutted?.first == true || upnutted?.second == true) {
-                                    //TODO: Triple check that it is, in fact, upnut for scales
                                     when (val metadata = event.metadata) {
                                         is JsonObject -> JsonObject(metadata + Pair("upnut", JsonPrimitive(true)))
                                         is JsonNull -> JsonObject(mapOf("upnut" to JsonPrimitive(true)))
@@ -649,23 +708,23 @@ class WhatsUpNut {
 
             route("/feed") {
                 route("/hot") {
-                    get("/global") { processGlobal(feedHotGlobalCache, upnut::globalHot) }
+                    get("/global") { processGlobal(feedHotGlobalCache, if (call.request.queryParameters["scales"] != null) upnut::globalHotScales else upnut::globalHot) }
 
-                    get("/team") { processFiltered(feedHotTeamCache, upnut::teamHot) }
+                    get("/team") { processFiltered(feedHotTeamCache, if (call.request.queryParameters["scales"] != null) upnut::teamHotScales else upnut::teamHot) }
 
-                    get("/game") { processFiltered(feedHotGameCache, upnut::gameHot) }
+                    get("/game") { processFiltered(feedHotGameCache, if (call.request.queryParameters["scales"] != null) upnut::gameHotScales else upnut::gameHot) }
 
-                    get("/player") { processFiltered(feedHotPlayerCache, upnut::playerHot) }
+                    get("/player") { processFiltered(feedHotPlayerCache, if (call.request.queryParameters["scales"] != null) upnut::playerHotScales else upnut::playerHot) }
                 }
 
                 route("/top") {
-                    get("/global") { processGlobal(feedTopGlobalCache, upnut::globalTop) }
+                    get("/global") { processGlobal(feedTopGlobalCache, if (call.request.queryParameters["scales"] != null) upnut::globalTopScales else upnut::globalTop) }
 
-                    get("/team") { processFiltered(feedTopTeamCache, upnut::teamTop) }
+                    get("/team") { processFiltered(feedTopTeamCache, if (call.request.queryParameters["scales"] != null) upnut::teamTopScales else upnut::teamTop) }
 
-                    get("/game") { processFiltered(feedTopGameCache, upnut::gameTop) }
+                    get("/game") { processFiltered(feedTopGameCache, if (call.request.queryParameters["scales"] != null) upnut::gameTopScales else upnut::gameTop) }
 
-                    get("/player") { processFiltered(feedTopPlayerCache, upnut::playerTop) }
+                    get("/player") { processFiltered(feedTopPlayerCache, if (call.request.queryParameters["scales"] != null) upnut::playerTopScales else upnut::playerTop) }
                 }
 
                 get("/global") {

@@ -79,43 +79,34 @@ class UpNutClient(config: JsonObject) {
         const val METADATA_NO_CREATED_FILTER = "feed_id IN (SELECT feed_id FROM event_metadata WHERE $SEASON_FILTER AND $TOURNAMENT_FILTER AND $TYPE_FILTER AND $DAY_FILTER AND $PHASE_FILTER AND $CATEGORY_FILTER)"
 
         val GLOBAL_HOT = hotPSQLWithTime(NONE_OF_PROVIDERS_FILTER, NONE_OF_SOURCES_FILTER, ONE_OF_PROVIDERS_FILTER, ONE_OF_SOURCES_FILTER, METADATA_FILTER)
-        val GLOBAL_HOT_SOURCES = hotPSQLWithTime(ONE_OF_SOURCES_FILTER, METADATA_FILTER)
-        val GLOBAL_HOT_NOT_SOURCES = hotPSQLWithTime(NONE_OF_SOURCES_FILTER, METADATA_FILTER)
+        val GLOBAL_HOT_SCALES = hotScalesPSQLWithTime(NONE_OF_PROVIDERS_FILTER, NONE_OF_SOURCES_FILTER, ONE_OF_PROVIDERS_FILTER, ONE_OF_SOURCES_FILTER, METADATA_FILTER)
 
         val GLOBAL_TOP = topPSQLWithTime(NONE_OF_PROVIDERS_FILTER, NONE_OF_SOURCES_FILTER, ONE_OF_PROVIDERS_FILTER, ONE_OF_SOURCES_FILTER, METADATA_FILTER)
-        val GLOBAL_TOP_SOURCES = topPSQLWithTime(ONE_OF_SOURCES_FILTER, METADATA_FILTER)
-        val GLOBAL_TOP_NOT_SOURCES = topPSQLWithTime(NONE_OF_SOURCES_FILTER, METADATA_FILTER)
+        val GLOBAL_TOP_SCALES = topScalesPSQLWithTime(NONE_OF_PROVIDERS_FILTER, NONE_OF_SOURCES_FILTER, ONE_OF_PROVIDERS_FILTER, ONE_OF_SOURCES_FILTER, METADATA_FILTER)
 
         val GLOBAL_EVENT_IDS = getEventIDs(CREATED_TIME_FILTER, NOT_IN_FEED_ID_FILTER, METADATA_NO_CREATED_FILTER)
 
         val TEAM_HOT = hotPSQLWithTimeAndTeam(NONE_OF_PROVIDERS_FILTER, NONE_OF_SOURCES_FILTER, ONE_OF_PROVIDERS_FILTER, ONE_OF_SOURCES_FILTER, METADATA_FILTER)
-        val TEAM_HOT_SOURCES = hotPSQLWithTimeAndTeam(ONE_OF_SOURCES_FILTER, METADATA_FILTER)
-        val TEAM_HOT_NOT_SOURCES = hotPSQLWithTimeAndTeam(NONE_OF_SOURCES_FILTER, METADATA_FILTER)
+        val TEAM_HOT_SCALES = hotScalesPSQLWithTimeAndTeam(NONE_OF_PROVIDERS_FILTER, NONE_OF_SOURCES_FILTER, ONE_OF_PROVIDERS_FILTER, ONE_OF_SOURCES_FILTER, METADATA_FILTER)
 
         val TEAM_TOP = topPSQLWithTimeAndTeam(NONE_OF_PROVIDERS_FILTER, NONE_OF_SOURCES_FILTER, ONE_OF_PROVIDERS_FILTER, ONE_OF_SOURCES_FILTER, METADATA_FILTER)
-        val TEAM_TOP_SOURCES = topPSQLWithTimeAndTeam(ONE_OF_SOURCES_FILTER, METADATA_FILTER)
-        val TEAM_TOP_NOT_SOURCES = topPSQLWithTimeAndTeam(NONE_OF_SOURCES_FILTER, METADATA_FILTER)
+        val TEAM_TOP_SCALES = topScalesPSQLWithTimeAndTeam(NONE_OF_PROVIDERS_FILTER, NONE_OF_SOURCES_FILTER, ONE_OF_PROVIDERS_FILTER, ONE_OF_SOURCES_FILTER, METADATA_FILTER)
 
         val TEAM_EVENT_IDS = getEventIDs(CREATED_TIME_FILTER, TEAM_FILTER, METADATA_NO_CREATED_FILTER)
 
         val GAME_HOT = hotPSQLWithTimeAndGame(NONE_OF_PROVIDERS_FILTER, NONE_OF_SOURCES_FILTER, ONE_OF_PROVIDERS_FILTER, ONE_OF_SOURCES_FILTER)
-        val GAME_HOT_SOURCES = hotPSQLWithTimeAndGame(ONE_OF_SOURCES_FILTER, METADATA_FILTER)
-        val GAME_HOT_NOT_SOURCES = hotPSQLWithTimeAndGame(NONE_OF_SOURCES_FILTER, METADATA_FILTER)
+        val GAME_HOT_SCALES = hotScalesPSQLWithTimeAndGame(NONE_OF_PROVIDERS_FILTER, NONE_OF_SOURCES_FILTER, ONE_OF_PROVIDERS_FILTER, ONE_OF_SOURCES_FILTER)
 
         val GAME_TOP = topPSQLWithTimeAndGame(NONE_OF_PROVIDERS_FILTER, NONE_OF_SOURCES_FILTER, ONE_OF_PROVIDERS_FILTER, ONE_OF_SOURCES_FILTER)
-        val GAME_TOP_SOURCES = topPSQLWithTimeAndGame(ONE_OF_SOURCES_FILTER, METADATA_FILTER)
-        val GAME_TOP_NOT_SOURCES = topPSQLWithTimeAndGame(NONE_OF_SOURCES_FILTER, METADATA_FILTER)
+        val GAME_TOP_SCALES = topScalesPSQLWithTimeAndGame(NONE_OF_PROVIDERS_FILTER, NONE_OF_SOURCES_FILTER, ONE_OF_PROVIDERS_FILTER, ONE_OF_SOURCES_FILTER)
 
         val GAME_EVENT_IDS = getEventIDs(CREATED_TIME_FILTER, GAME_FILTER, METADATA_NO_CREATED_FILTER)
 
         val PLAYER_HOT = hotPSQLWithTimeAndPlayer(NONE_OF_PROVIDERS_FILTER, NONE_OF_SOURCES_FILTER, ONE_OF_PROVIDERS_FILTER, ONE_OF_SOURCES_FILTER, METADATA_FILTER)
-        val PLAYER_HOT_SOURCES = hotPSQLWithTimeAndPlayer(ONE_OF_SOURCES_FILTER, METADATA_FILTER)
-        val PLAYER_HOT_NOT_SOURCES = hotPSQLWithTimeAndPlayer(NONE_OF_SOURCES_FILTER, METADATA_FILTER)
+        val PLAYER_HOT_SCALES = hotScalesPSQLWithTimeAndPlayer(NONE_OF_PROVIDERS_FILTER, NONE_OF_SOURCES_FILTER, ONE_OF_PROVIDERS_FILTER, ONE_OF_SOURCES_FILTER, METADATA_FILTER)
 
         val PLAYER_TOP = topPSQLWithTimeAndPlayer(NONE_OF_PROVIDERS_FILTER, NONE_OF_SOURCES_FILTER, ONE_OF_PROVIDERS_FILTER, ONE_OF_SOURCES_FILTER, METADATA_FILTER)
-        val PLAYER_TOP_SOURCES = topPSQLWithTimeAndPlayer(ONE_OF_SOURCES_FILTER, METADATA_FILTER)
-        val PLAYER_TOP_NOT_SOURCES = topPSQLWithTimeAndPlayer(NONE_OF_SOURCES_FILTER, METADATA_FILTER)
-
+        val PLAYER_TOP_SCALES = topScalesPSQLWithTimeAndPlayer(NONE_OF_PROVIDERS_FILTER, NONE_OF_SOURCES_FILTER, ONE_OF_PROVIDERS_FILTER, ONE_OF_SOURCES_FILTER, METADATA_FILTER)
         val PLAYER_EVENT_IDS = getEventIDs(CREATED_TIME_FILTER, PLAYER_FILTER, METADATA_NO_CREATED_FILTER)
 
         val EVENTUALLY_EVENTS =
@@ -181,6 +172,64 @@ class UpNutClient(config: JsonObject) {
 
         inline fun topPSQLWithTimeAndPlayer(vararg and: String) =
             topPSQL(TIME_FILTER, PLAYER_FILTER, *and)
+
+        /** Scales */
+
+        inline fun hotScalesPSQL(vararg where: String) =
+            NutSqlStatement {
+                appendLine("SELECT list.feed_id, list.nuts, list.scales, list.time, floor(log(10, list.scales) + (meta.created / 1000 / 604800)) as sort")
+                appendLine("FROM (")
+
+                appendLine("SELECT feed_id, SUM(nuts) AS nuts, SUM(scales) as scales, MAX(time) as time")
+                appendLine("FROM upnuts")
+                if (where.isNotEmpty()) where.joinTo(this, prefix = "WHERE ", separator = " AND ", postfix = "\n")
+                appendLine("GROUP BY feed_id")
+                appendLine("HAVING SUM(scales) < 1000")
+
+                appendLine(") as list")
+                appendLine("JOIN (")
+
+                appendLine("SELECT feed_id, created FROM event_metadata")
+
+                appendLine(") as meta ON list.feed_id = meta.feed_id")
+                appendLine("ORDER BY sort DESC, list.scales DESC, list.nuts DESC, list.time DESC")
+                appendLine("LIMIT $LIMIT_VAR OFFSET $OFFSET_VAR")
+            }
+
+        inline fun hotScalesPSQLWithTime(vararg and: String) =
+            hotScalesPSQL(TIME_FILTER, *and)
+
+        inline fun hotScalesPSQLWithTimeAndTeam(vararg and: String) =
+            hotScalesPSQL(TIME_FILTER, TEAM_FILTER, *and)
+
+        inline fun hotScalesPSQLWithTimeAndGame(vararg and: String) =
+            hotScalesPSQL(TIME_FILTER, GAME_FILTER, *and)
+
+        inline fun hotScalesPSQLWithTimeAndPlayer(vararg and: String) =
+            hotScalesPSQL(TIME_FILTER, PLAYER_FILTER, *and)
+
+        inline fun topScalesPSQL(vararg where: String) =
+            NutSqlStatement {
+                appendLine("SELECT feed_id, SUM(nuts) AS nuts, SUM(scales) as scales")
+                appendLine("FROM upnuts")
+                if (where.isNotEmpty()) where.joinTo(this, prefix = "WHERE ", separator = " AND ", postfix = "\n")
+                appendLine("GROUP BY feed_id")
+                appendLine("HAVING SUM(scales) < 1000")
+                appendLine("ORDER BY scales DESC, nuts DESC")
+                appendLine("LIMIT $LIMIT_VAR OFFSET $OFFSET_VAR")
+            }
+
+        inline fun topScalesPSQLWithTime(vararg and: String) =
+            topScalesPSQL(TIME_FILTER, *and)
+
+        inline fun topScalesPSQLWithTimeAndTeam(vararg and: String) =
+            topScalesPSQL(TIME_FILTER, TEAM_FILTER, *and)
+
+        inline fun topScalesPSQLWithTimeAndGame(vararg and: String) =
+            topScalesPSQL(TIME_FILTER, GAME_FILTER, *and)
+
+        inline fun topScalesPSQLWithTimeAndPlayer(vararg and: String) =
+            topScalesPSQL(TIME_FILTER, PLAYER_FILTER, *and)
     }
 
     val connectionFactory: ConnectionFactory = ConnectionFactories.get(
@@ -356,31 +405,30 @@ class UpNutClient(config: JsonObject) {
             .collectList()
             .awaitFirstOrNull()
 
-    suspend fun globalHotInSources(time: Long, limit: Int, offset: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
-        GLOBAL_HOT_SOURCES(client)
+    suspend fun globalHotScales(
+        time: Long,
+        limit: Int,
+        offset: Int,
+        noneOfProviders: List<UUID>? = null,
+        noneOfSources: List<UUID>? = null,
+        oneOfProviders: List<UUID>? = null,
+        oneOfSources: List<UUID>? = null,
+        addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }
+    ) =
+        GLOBAL_HOT_SCALES(client)
             .metadata()
             .time(time)
             .limit(limit)
             .offset(offset)
-            .oneOfSources(sources)
+            .noneOfProviders(noneOfProviders)
+            .noneOfSources(noneOfSources)
+            .oneOfProviders(oneOfProviders)
+            .oneOfSources(oneOfSources)
             .addMetadata()
             .fetch()
             .all()
             .collectList()
-            .awaitSingleOrNull()
-
-    suspend fun globalHotNotInSources(time: Long, limit: Int, offset: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
-        GLOBAL_HOT_NOT_SOURCES(client)
-            .metadata()
-            .time(time)
-            .limit(limit)
-            .offset(offset)
-            .oneOfSources(sources)
-            .addMetadata()
-            .fetch()
-            .all()
-            .collectList()
-            .awaitSingleOrNull()
+            .awaitFirstOrNull()
 
     suspend fun globalTop(
         time: Long, limit: Int, offset: Int,
@@ -405,32 +453,28 @@ class UpNutClient(config: JsonObject) {
             .collectList()
             .awaitSingleOrNull()
 
-    suspend fun globalTopInSources(time: Long, limit: Int, offset: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
-        GLOBAL_TOP_SOURCES(client)
+    suspend fun globalTopScales(
+        time: Long, limit: Int, offset: Int,
+        noneOfProviders: List<UUID>? = null,
+        noneOfSources: List<UUID>? = null,
+        oneOfProviders: List<UUID>? = null,
+        oneOfSources: List<UUID>? = null,
+        addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }
+    ) =
+        GLOBAL_TOP_SCALES(client)
             .metadata()
             .time(time)
             .limit(limit)
             .offset(offset)
-            .oneOfSources(sources)
+            .noneOfProviders(noneOfProviders)
+            .noneOfSources(noneOfSources)
+            .oneOfProviders(oneOfProviders)
+            .oneOfSources(oneOfSources)
             .addMetadata()
             .fetch()
             .all()
             .collectList()
             .awaitSingleOrNull()
-
-    suspend fun globalTopNotInSources(time: Long, limit: Int, offset: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
-        GLOBAL_TOP_NOT_SOURCES(client)
-            .metadata()
-            .time(time)
-            .limit(limit)
-            .offset(offset)
-            .oneOfSources(sources)
-            .addMetadata()
-            .fetch()
-            .all()
-            .collectList()
-            .awaitSingleOrNull()
-
 
     suspend fun teamEventsBefore(teamID: UUID, time: Long, limit: Int, offset: Int, feedIDs: Iterable<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec) =
         TEAM_EVENT_IDS(client)
@@ -471,34 +515,6 @@ class UpNutClient(config: JsonObject) {
             .collectList()
             .awaitSingleOrNull()
 
-    suspend fun teamHotInSources(teamID: UUID, time: Long, limit: Int, offset: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
-        TEAM_HOT_SOURCES(client)
-            .metadata()
-            .team(teamID)
-            .time(time)
-            .limit(limit)
-            .offset(offset)
-            .oneOfSources(sources)
-            .addMetadata()
-            .fetch()
-            .all()
-            .collectList()
-            .awaitSingleOrNull()
-
-    suspend fun teamHotNotInSources(teamID: UUID, time: Long, limit: Int, offset: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
-        TEAM_HOT_NOT_SOURCES(client)
-            .metadata()
-            .team(teamID)
-            .time(time)
-            .limit(limit)
-            .offset(offset)
-            .oneOfSources(sources)
-            .addMetadata()
-            .fetch()
-            .all()
-            .collectList()
-            .awaitSingleOrNull()
-
     suspend fun teamTop(
         teamID: UUID, time: Long, limit: Int, offset: Int,
         noneOfProviders: List<UUID>? = null,
@@ -523,33 +539,54 @@ class UpNutClient(config: JsonObject) {
             .collectList()
             .awaitSingleOrNull()
 
-    suspend fun teamTopInSources(teamID: UUID, time: Long, limit: Int, offset: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
-        TEAM_TOP_SOURCES(client)
+    suspend fun teamHotScales(
+        teamID: UUID, time: Long, limit: Int, offset: Int,
+        noneOfProviders: List<UUID>? = null,
+        noneOfSources: List<UUID>? = null,
+        oneOfProviders: List<UUID>? = null,
+        oneOfSources: List<UUID>? = null,
+        addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }
+    ) =
+        TEAM_HOT_SCALES(client)
             .metadata()
             .team(teamID)
             .time(time)
             .limit(limit)
             .offset(offset)
-            .oneOfSources(sources)
+            .noneOfProviders(noneOfProviders)
+            .noneOfSources(noneOfSources)
+            .oneOfProviders(oneOfProviders)
+            .oneOfSources(oneOfSources)
             .addMetadata()
             .fetch()
             .all()
             .collectList()
             .awaitSingleOrNull()
 
-    suspend fun teamTopNotInSources(teamID: UUID, time: Long, limit: Int, offset: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
-        TEAM_TOP_NOT_SOURCES(client)
+    suspend fun teamTopScales(
+        teamID: UUID, time: Long, limit: Int, offset: Int,
+        noneOfProviders: List<UUID>? = null,
+        noneOfSources: List<UUID>? = null,
+        oneOfProviders: List<UUID>? = null,
+        oneOfSources: List<UUID>? = null,
+        addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }
+    ) =
+        TEAM_TOP_SCALES(client)
             .metadata()
             .team(teamID)
             .time(time)
             .limit(limit)
             .offset(offset)
-            .oneOfSources(sources)
+            .noneOfProviders(noneOfProviders)
+            .noneOfSources(noneOfSources)
+            .oneOfProviders(oneOfProviders)
+            .oneOfSources(oneOfSources)
             .addMetadata()
             .fetch()
             .all()
             .collectList()
             .awaitSingleOrNull()
+
 
     suspend fun gameEventsBefore(gameID: UUID, time: Long, limit: Int, offset: Int, feedIDs: Iterable<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec) =
         GAME_EVENT_IDS(client)
@@ -590,34 +627,6 @@ class UpNutClient(config: JsonObject) {
             .collectList()
             .awaitSingleOrNull()
 
-    suspend fun gameHotInSources(gameID: UUID, time: Long, limit: Int, offset: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
-        GAME_HOT_SOURCES(client)
-            .metadata()
-            .game(gameID)
-            .time(time)
-            .limit(limit)
-            .offset(offset)
-            .oneOfSources(sources)
-            .addMetadata()
-            .fetch()
-            .all()
-            .collectList()
-            .awaitSingleOrNull()
-
-    suspend fun gameHotNotInSources(gameID: UUID, time: Long, limit: Int, offset: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
-        GAME_HOT_NOT_SOURCES(client)
-            .metadata()
-            .game(gameID)
-            .time(time)
-            .limit(limit)
-            .offset(offset)
-            .oneOfSources(sources)
-            .addMetadata()
-            .fetch()
-            .all()
-            .collectList()
-            .awaitSingleOrNull()
-
     suspend fun gameTop(
         gameID: UUID, time: Long, limit: Int, offset: Int,
         noneOfProviders: List<UUID>? = null,
@@ -642,28 +651,48 @@ class UpNutClient(config: JsonObject) {
             .collectList()
             .awaitSingleOrNull()
 
-    suspend fun gameTopInSources(gameID: UUID, time: Long, limit: Int, offset: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
-        GAME_TOP_SOURCES(client)
+    suspend fun gameHotScales(
+        gameID: UUID, time: Long, limit: Int, offset: Int,
+        noneOfProviders: List<UUID>? = null,
+        noneOfSources: List<UUID>? = null,
+        oneOfProviders: List<UUID>? = null,
+        oneOfSources: List<UUID>? = null,
+        addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }
+    ) =
+        GAME_HOT_SCALES(client)
             .metadata()
             .game(gameID)
             .time(time)
             .limit(limit)
             .offset(offset)
-            .oneOfSources(sources)
+            .noneOfProviders(noneOfProviders)
+            .noneOfSources(noneOfSources)
+            .oneOfProviders(oneOfProviders)
+            .oneOfSources(oneOfSources)
             .addMetadata()
             .fetch()
             .all()
             .collectList()
             .awaitSingleOrNull()
 
-    suspend fun gameTopNotInSources(gameID: UUID, time: Long, limit: Int, offset: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
-        GAME_TOP_NOT_SOURCES(client)
+    suspend fun gameTopScales(
+        gameID: UUID, time: Long, limit: Int, offset: Int,
+        noneOfProviders: List<UUID>? = null,
+        noneOfSources: List<UUID>? = null,
+        oneOfProviders: List<UUID>? = null,
+        oneOfSources: List<UUID>? = null,
+        addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }
+    ) =
+        GAME_TOP_SCALES(client)
             .metadata()
             .game(gameID)
             .time(time)
             .limit(limit)
             .offset(offset)
-            .oneOfSources(sources)
+            .noneOfProviders(noneOfProviders)
+            .noneOfSources(noneOfSources)
+            .oneOfProviders(oneOfProviders)
+            .oneOfSources(oneOfSources)
             .addMetadata()
             .fetch()
             .all()
@@ -709,34 +738,6 @@ class UpNutClient(config: JsonObject) {
             .collectList()
             .awaitSingleOrNull()
 
-    suspend fun playerHotInSources(playerID: UUID, time: Long, limit: Int, offset: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
-        PLAYER_HOT_SOURCES(client)
-            .metadata()
-            .player(playerID)
-            .time(time)
-            .limit(limit)
-            .offset(offset)
-            .oneOfSources(sources)
-            .addMetadata()
-            .fetch()
-            .all()
-            .collectList()
-            .awaitSingleOrNull()
-
-    suspend fun playerHotNotInSources(playerID: UUID, time: Long, limit: Int, offset: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
-        PLAYER_HOT_NOT_SOURCES(client)
-            .metadata()
-            .player(playerID)
-            .time(time)
-            .limit(limit)
-            .offset(offset)
-            .oneOfSources(sources)
-            .addMetadata()
-            .fetch()
-            .all()
-            .collectList()
-            .awaitSingleOrNull()
-
     suspend fun playerTop(
         playerID: UUID, time: Long, limit: Int, offset: Int,
         noneOfProviders: List<UUID>? = null,
@@ -761,28 +762,48 @@ class UpNutClient(config: JsonObject) {
             .collectList()
             .awaitSingleOrNull()
 
-    suspend fun playerTopInSources(playerID: UUID, time: Long, limit: Int, offset: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
-        PLAYER_TOP_SOURCES(client)
+    suspend fun playerHotScales(
+        playerID: UUID, time: Long, limit: Int, offset: Int,
+        noneOfProviders: List<UUID>? = null,
+        noneOfSources: List<UUID>? = null,
+        oneOfProviders: List<UUID>? = null,
+        oneOfSources: List<UUID>? = null,
+        addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }
+    ) =
+        PLAYER_HOT_SCALES(client)
             .metadata()
             .player(playerID)
             .time(time)
             .limit(limit)
             .offset(offset)
-            .oneOfSources(sources)
+            .noneOfProviders(noneOfProviders)
+            .noneOfSources(noneOfSources)
+            .oneOfProviders(oneOfProviders)
+            .oneOfSources(oneOfSources)
             .addMetadata()
             .fetch()
             .all()
             .collectList()
             .awaitSingleOrNull()
 
-    suspend fun playerTopNotInSources(playerID: UUID, time: Long, limit: Int, offset: Int, sources: List<UUID>, addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }) =
-        PLAYER_TOP_NOT_SOURCES(client)
+    suspend fun playerTopScales(
+        playerID: UUID, time: Long, limit: Int, offset: Int,
+        noneOfProviders: List<UUID>? = null,
+        noneOfSources: List<UUID>? = null,
+        oneOfProviders: List<UUID>? = null,
+        oneOfSources: List<UUID>? = null,
+        addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }
+    ) =
+        PLAYER_TOP_SCALES(client)
             .metadata()
             .player(playerID)
             .time(time)
             .limit(limit)
             .offset(offset)
-            .oneOfSources(sources)
+            .noneOfProviders(noneOfProviders)
+            .noneOfSources(noneOfSources)
+            .oneOfProviders(oneOfProviders)
+            .oneOfSources(oneOfSources)
             .addMetadata()
             .fetch()
             .all()

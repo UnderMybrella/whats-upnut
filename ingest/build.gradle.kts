@@ -11,7 +11,7 @@ plugins {
 }
 
 group = "dev.brella"
-version = "1.9.0"
+version = "1.9.1"
 
 repositories {
     mavenCentral()
@@ -30,20 +30,29 @@ dependencies {
 
     implementation(project(":common"))
 
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.2.1")
+
     implementation("io.ktor:ktor-client-okhttp:$ktor_version")
     implementation("io.ktor:ktor-client-encoding:$ktor_version")
     implementation("io.ktor:ktor-client-core-jvm:$ktor_version")
-    implementation("io.ktor:ktor-client-serialization:$ktor_version")
+    implementation("io.ktor:ktor-client-serialization:$ktor_version") {
+        exclude("org.jetbrains.kotlinx", "kotlinx-serialization-core")
+        exclude("org.jetbrains.kotlinx", "kotlinx-serialization-json")
+    }
     implementation("io.ktor:ktor-client-encoding:$ktor_version")
 
     implementation("dev.brella:ktornea-utils:1.2.3-alpha")
 
-    implementation("dev.brella:kornea-blaseball-base:2.2.9-alpha")
-    implementation("dev.brella:kornea-blaseball-api:2.2.1-alpha")
+    implementation("dev.brella:kornea-blaseball-base:2.2.9-alpha") {
+        exclude("org.jetbrains.kotlinx", "kotlinx-serialization-core")
+        exclude("org.jetbrains.kotlinx", "kotlinx-serialization-json")
+    }
+    implementation("dev.brella:kornea-blaseball-api:2.2.1-alpha") {
+        exclude("org.jetbrains.kotlinx", "kotlinx-serialization-core")
+        exclude("org.jetbrains.kotlinx", "kotlinx-serialization-json")
+    }
 
     implementation("dev.brella:kornea-errors:2.0.3-alpha")
-
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.2.0")
 
     implementation("ch.qos.logback:logback-classic:1.2.3")
 

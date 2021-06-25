@@ -11,7 +11,11 @@ import io.ktor.client.call.*
 import io.ktor.client.statement.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.SendChannel
+import kotlinx.coroutines.channels.actor
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.isActive
 import kotlinx.serialization.json.intOrNull
 import org.slf4j.Logger
@@ -39,29 +43,33 @@ public interface ShellSource {
             val etags: MutableMap<Int, String> = HashMap()
 
             loopEvery(loopEvery, `while` = { isActive }) {
-                var start = 0
+                try {
+                    var start = 0
 
-                while (isActive && start < totalLimit) {
-                    val now = now()
-                    val response = retrievePage(start, limit, now)
-                    val existingTag = etags[start]
-                    val responseTag = response.headers["Etag"]
-                    if (existingTag != null && existingTag == responseTag) {
-                        start += limit
-                        logger.trace("Hit ETag; continuing at {}", start)
-                    } else {
-                        val list = response.responseToPageList()
-                            .trimIf(sortingByHot == true)
+                    while (isActive && start < totalLimit) {
+                        val now = now()
+                        val response = retrievePage(start, limit, now)
+                        val existingTag = etags[start]
+                        val responseTag = response.headers["Etag"]
+                        if (existingTag != null && existingTag == responseTag) {
+                            start += limit
+                            logger.trace("Hit ETag; continuing at {}", start)
+                        } else {
+                            val list = response.responseToPageList()
+                                .trimIf(sortingByHot == true)
 
-                        mailbox.send(Pair(now, list))
+                            mailbox.send(Pair(now, list))
 
-                        if (list.size < limit) break
+                            if (list.size < limit) break
 
-                        responseTag?.let { etags[start] = it }
-                        start += list.size
+                            responseTag?.let { etags[start] = it }
+                            start += list.size
 
-                        delay(delayBetweenLoops)
+                            delay(delayBetweenLoops)
+                        }
                     }
+                } catch (th: Throwable) {
+                    logger.error("Caught error when looping through {}: ", this, th)
                 }
             }
         }
@@ -180,42 +188,69 @@ public interface ShellSource {
             val etags: MutableMap<Int, String> = HashMap()
             val shouldTrim = sortBy == BLASEBALL_SORTING_HOT || sortBy == BLASEBALL_SORTING_TOP
 
+            val metadataAdjustment = actor<Pair<String, List<UpNutEvent>>> {
+                receiveAsFlow()
+                    .onEach { (storyID, list) ->
+                        databaseClient.inConnectionAwait { connection ->
+                            if (list.isEmpty()) return@inConnectionAwait
+
+                            val statement =
+                                connection.createStatement("INSERT INTO storytime (feed_id, story_id) VALUES ( \$1, \$2 ) ON CONFLICT DO NOTHING")
+
+                            val storyUUID = UUID.fromString(storyID)
+
+                            list.forEach { event ->
+                                statement.bind("$1", event.id)
+                                    .bind("$2", storyUUID)
+                                    .add()
+                            }
+
+                            statement.awaitRowsUpdated()
+                        }
+                    }.launchIn(this)
+                    .join()
+            }
+
             loopEvery(loopEvery, `while` = { isActive }) {
+                try {
+                    val storyList = databaseClient.sql("SELECT id FROM library WHERE redacted = FALSE")
+                        .map { row -> row.getValue<UUID>("id").toString() }
+                        .all()
+                        .collectList()
+                        .await()
 
-                val storyList = databaseClient.sql("SELECT id FROM library WHERE redacted = FALSE")
-                    .map { row -> row.getValue<UUID>("id").toString() }
-                    .all()
-                    .collectList()
-                    .await()
+                    logger.info("Retrieving nuts and scales for {}", storyList)
 
-                logger.info("Retrieving nuts and scales for {}", storyList)
+                    storyList.forEach { story ->
+                        var start = 0
 
-                storyList.forEach { story ->
-                    var start = 0
+                        while (isActive && start < totalLimit) {
+                            val now = now()
 
-                    while (isActive && start < totalLimit) {
-                        val now = now()
+                            val response = httpClient.getStoryFeedAsResponse(story, limit = limit, sort = sortBy, category = category, start = start)
+                            val existingTag = etags[start]
+                            val responseTag = response.headers["Etag"]
+                            if (existingTag != null && existingTag == responseTag) {
+                                start += limit
+                                logger.trace("Hit ETag; continuing at {}", start)
+                            } else {
+                                val list = response.receive<List<UpNutEvent>>()
+                                    .trimIf(shouldTrim)
 
-                        val response = httpClient.getStoryFeedAsResponse(story, limit = limit, sort = sortBy, category = category, start = start)
-                        val existingTag = etags[start]
-                        val responseTag = response.headers["Etag"]
-                        if (existingTag != null && existingTag == responseTag) {
-                            start += limit
-                            logger.trace("Hit ETag; continuing at {}", start)
-                        } else {
-                            val list = response.receive<List<UpNutEvent>>()
-                                .trimIf(shouldTrim)
+                                mailbox.send(Pair(now, list))
+                                metadataAdjustment.send(Pair(story, list))
 
-                            mailbox.send(Pair(now, list))
+                                if (list.size < limit) break
 
-                            if (list.size < limit) break
+                                responseTag?.let { etags[start] = it }
+                                start += list.size
 
-                            responseTag?.let { etags[start] = it }
-                            start += list.size
-
-                            delay(delayBetweenLoops)
+                                delay(delayBetweenLoops)
+                            }
                         }
                     }
+                } catch (th: Throwable) {
+                    logger.error("If someone screams in the library and there's no librarian, does it throw an error?", th)
                 }
             }
         }

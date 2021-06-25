@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "dev.brella"
-version = "1.5.2"
+version = "1.5.3"
 
 repositories {
     mavenCentral()
@@ -25,9 +25,16 @@ dependencyManagement {
 }
 
 dependencies {
-    implementation("dev.brella:kornea-blaseball-base:2.2.9-alpha")
-    implementation("dev.brella:kornea-errors:2.0.3-alpha")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.2.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.2.1")
+
+    implementation("dev.brella:kornea-blaseball-base:2.2.9-alpha") {
+        exclude("org.jetbrains.kotlinx", "kotlinx-serialization-core")
+        exclude("org.jetbrains.kotlinx", "kotlinx-serialization-json")
+    }
+    implementation("dev.brella:kornea-errors:2.0.3-alpha") {
+        exclude("org.jetbrains.kotlinx", "kotlinx-serialization-core")
+        exclude("org.jetbrains.kotlinx", "kotlinx-serialization-json")
+    }
     api("org.jetbrains.kotlinx:kotlinx-datetime:0.2.1")
 
 //    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.4.3")

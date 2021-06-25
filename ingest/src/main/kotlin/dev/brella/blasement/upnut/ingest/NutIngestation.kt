@@ -27,6 +27,7 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.int
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
 import org.slf4j.Logger
@@ -99,7 +100,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
         nuts.client.sql("CREATE TABLE IF NOT EXISTS snow_crystals (snow_id BIGINT NOT NULL PRIMARY KEY, uuid UUID NOT NULL);")
             .await()
 
-        nuts.client.sql("CREATE TABLE IF NOT EXISTS library (id UUID NOT NULL PRIMARY KEY, chapter_title_redacted VARCHAR(128), book_title VARCHAR(128) NOT NULL, chapter_title VARCHAR(128) NOT NULL, index_in_book INT NOT NULL, redacted BOOLEAN NOT NULL DEFAULT TRUE, exists BOOLEAN NOT NULL DEFAULT TRUE);")
+        nuts.client.sql("CREATE TABLE IF NOT EXISTS library (id UUID NOT NULL PRIMARY KEY, chapter_title_redacted VARCHAR(128), book_title VARCHAR(128) NOT NULL, book_index INT NOT NULL DEFAULT 0, chapter_title VARCHAR(128) NOT NULL, index_in_book INT NOT NULL, redacted BOOLEAN NOT NULL DEFAULT TRUE, exists BOOLEAN NOT NULL DEFAULT TRUE);")
             .await()
 
         nuts.client.sql("CREATE TABLE IF NOT EXISTS event_log (id BIGSERIAL PRIMARY KEY, type INT NOT NULL, data json NOT NULL, created BIGINT NOT NULL, processed BOOLEAN NOT NULL DEFAULT FALSE);")
@@ -107,6 +108,17 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
 
         nuts.client.sql("CREATE TABLE IF NOT EXISTS metadata_collection (feed_id UUID not null PRIMARY KEY, data json, cleared BOOLEAN NOT NULL DEFAULT FALSE);")
             .await()
+
+        nuts.client.sql("CREATE TABLE IF NOT EXISTS storytime (feed_id UUID NOT NULL PRIMARY KEY, story_id UUID NOT NULL)")
+            .await()
+
+        try {
+            nuts.client.sql("ALTER TABLE library ADD COLUMN book_index INT NOT NULL DEFAULT 0")
+                .await()
+        } catch (th: Throwable) {
+            println("Already altered library")
+            th.printStackTrace()
+        }
 
 //        nuts.client.sql("ALTER TABLE metadata_collection ADD COLUMN cleared BOOLEAN NOT NULL DEFAULT FALSE")
 //            .await()
@@ -597,14 +609,19 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
 
                     val books = Json.decodeFromString<List<LibraryBook>>(response.receive<String>())
 
-                    val booksReturned = nuts.client.sql("SELECT id, chapter_title, redacted FROM library").map { row ->
-                        Pair(row.getValue<UUID>("id"), Pair(row.getValue<String>("chapter_title"), row.get<Boolean>("redacted")))
-                    }.all()
-                                            .collectList()
-                                            .awaitFirstOrNull()
-                                            ?.filterNotNull()
-                                            ?.toMap()
-                                        ?: emptyMap()
+                    val booksReturned =
+                        nuts.client.sql("SELECT id, chapter_title, redacted FROM library WHERE exists = TRUE")
+                            .map { row ->
+                                Pair(
+                                    row.getValue<UUID>("id"),
+                                    Pair(row.getValue<String>("chapter_title"), row.get<Boolean>("redacted"))
+                                )
+                            }.all()
+                            .collectList()
+                            .awaitFirstOrNull()
+                            ?.filterNotNull()
+                            ?.toMap()
+                        ?: emptyMap()
 
                     val chaptersAdded: MutableList<WebhookEvent.LibraryChapter> = ArrayList()
                     val chaptersUnlocked: MutableList<WebhookEvent.LibraryChapter> = ArrayList()
@@ -613,18 +630,20 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
                     books.forEachIndexed { bookIndex, (bookName, chapters) ->
                         chapters.forEachIndexed { chapterIndex, chapter ->
                             val existing = booksReturned[chapter.id]
+
+                            nuts.client.sql("INSERT INTO library (id, book_title, book_index, chapter_title, redacted, index_in_book) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO UPDATE SET book_title = $2, book_index = $3, chapter_title = $4, redacted = $5, index_in_book = $6")
+                                .bind("$1", chapter.id)
+                                .bind("$2", bookName)
+                                .bind("$3", bookIndex)
+                                .bind("$4", chapter.title)
+                                .bind("$5", chapter.redacted)
+                                .bind("$6", chapterIndex)
+                                .await()
+
                             if (existing == null) {
                                 //New book just dropped
 
                                 logger.info("New book just dropped: {} / {}", bookName, chapter.title)
-
-                                nuts.client.sql("INSERT INTO library (id, book_title, chapter_title, redacted, index_in_book) VALUES ($1, $2, $3, $4, $5)")
-                                    .bind("$1", chapter.id)
-                                    .bind("$2", bookName)
-                                    .bind("$3", chapter.title)
-                                    .bind("$4", chapter.redacted)
-                                    .bind("$5", chapterIndex)
-                                    .await()
 
                                 val chapter = WebhookEvent.LibraryChapter(bookName, bookIndex, chapter.id, chapter.title, null, chapterIndex, chapter.redacted)
                                 chaptersAdded.add(chapter)
@@ -633,21 +652,25 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
 
                             } else if (chapter.redacted != existing.second) {
                                 //Book is now unredacted! -- Right ?
-
                                 logger.info("Book has shifted redactivity: {} -> {}, {} -> {}", existing.first, chapter.title, existing.second, chapter.redacted)
-
-                                nuts.client.sql("UPDATE library SET chapter_title = $1, chapter_title_redacted = $2, redacted = $3, index_in_book = $4 WHERE id = $5")
-                                    .bind("$1", chapter.title)
-                                    .bind("$2", existing.first)
-                                    .bind("$3", chapter.redacted)
-                                    .bind("$4", chapterIndex)
-                                    .bind("$5", chapter.id)
-                                    .await()
 
                                 val chapter = WebhookEvent.LibraryChapter(bookName, bookIndex, chapter.id, chapter.title, existing.first, chapterIndex, chapter.redacted)
                                 if (chapter.isRedacted) chaptersLocked.add(chapter)
                                 else chaptersUnlocked.add(chapter)
                             }
+                        }
+                    }
+
+                    val allExistingChapters = books.flatMap(LibraryBook::chapters).map(LibraryBookChapter::id)
+                    booksReturned.forEach { (chapterID, pair) ->
+                        if (chapterID !in allExistingChapters) {
+                            logger.warn("Chapter has been removed: {} / {}", pair.first, pair.second)
+
+                            nuts.client.sql("UPDATE library SET exists = FALSE WHERE id = $1")
+                                .bind("$1", chapterID)
+                                .await()
+
+                            //chaptersRemoved.add(WebhookEvent.ChapterRemoved()
                         }
                     }
 
@@ -888,7 +911,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
             nuts.client.inConnectionAwait { connection ->
                 events.chunked(100).forEach { chunk ->
                     val statement =
-                        connection.createStatement("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( \$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8 ) ON CONFLICT DO NOTHING")
+                        connection.createStatement("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( \$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8 ) ON CONFLICT (feed_id) DO UPDATE SET created = $2, season = $3, tournament = $4, type = $5, day = $6, phase = $7, category = $8")
 
                     val missingInsertStatement =
                         connection.createStatement("UPDATE metadata_collection SET data = $2 WHERE feed_id = $1")
@@ -934,7 +957,8 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
                 .first()
                 .awaitFirstOrNull()
 
-            val nutsDifference = event.nuts.intOrNull - atTimeOfRecording?.first
+            val eventNuts = event.nuts.intOrNull
+            val nutsDifference = eventNuts - atTimeOfRecording?.first
             if (nutsDifference != null && nutsDifference > 0) {
                 nuts.client.sql("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                     .bind("$1", nutsDifference)
@@ -943,12 +967,11 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
                     .bind("$4", time)
                     .await()
 
-                val missing = NUTS_THRESHOLD - atTimeOfRecording!!.first
-
-                if (missing in 1 until nutsDifference) postEvent(WebhookEvent.ThresholdPassedNuts(NUTS_THRESHOLD, time, event), WebhookEvent.THRESHOLD_PASSED_NUTS)
+                if (eventNuts!! >= NUTS_THRESHOLD) postEvent(WebhookEvent.ThresholdPassedNuts(NUTS_THRESHOLD, time, event), WebhookEvent.THRESHOLD_PASSED_NUTS)
             }
 
-            val scalesDifference = event.scales.intOrNull - atTimeOfRecording?.second
+            val eventScales = event.scales.intOrNull
+            val scalesDifference = eventScales - atTimeOfRecording?.second
             if (scalesDifference != null && scalesDifference > 0) {
                 nuts.client.sql("INSERT INTO upnuts (scales, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
                     .bind("$1", scalesDifference)
@@ -957,10 +980,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
                     .bind("$4", time)
                     .await()
 
-                //We don't know the threshold for scales (or even how they work); making an educated guess
-                val missing = SCALES_THRESHOLD - atTimeOfRecording!!.second
-
-                if (missing in 1 until scalesDifference) postEvent(WebhookEvent.ThresholdPassedScales(SCALES_THRESHOLD, time, event), WebhookEvent.THRESHOLD_PASSED_SCALES)
+                if (eventScales!! >= SCALES_THRESHOLD) postEvent(WebhookEvent.ThresholdPassedScales(SCALES_THRESHOLD, time, event), WebhookEvent.THRESHOLD_PASSED_SCALES)
             }
 
             return atTimeOfRecording
