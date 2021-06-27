@@ -15,6 +15,7 @@ import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.content.*
 import io.ktor.http.*
+import io.ktor.network.sockets.*
 import io.ktor.util.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.SendChannel
@@ -27,20 +28,20 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.int
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.r2dbc.core.await
+import reactor.core.publisher.Mono
 import java.io.File
 import java.util.*
+import kotlin.collections.ArrayList
 import kotlin.collections.HashMap
 import kotlin.collections.HashSet
 import kotlin.coroutines.CoroutineContext
 import kotlin.time.ExperimentalTime
 import kotlin.time.measureTime
-import kotlin.time.measureTimedValue
 import kotlin.time.milliseconds
 import kotlin.time.seconds
 
@@ -85,16 +86,16 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
         nuts.client.sql("CREATE TABLE IF NOT EXISTS upnuts (id BIGSERIAL PRIMARY KEY, nuts INT, scales INT, feed_id uuid NOT NULL, source uuid, provider uuid NOT NULL, time BIGINT NOT NULL)")
             .await()
 
-        nuts.client.sql("CREATE TABLE IF NOT EXISTS game_nuts (id BIGSERIAL PRIMARY KEY, feed_id uuid NOT NULL, game_id uuid NOT NULL);")
+        nuts.client.sql("CREATE TABLE IF NOT EXISTS game_nuts (feed_id uuid NOT NULL, game_id uuid NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS idx_game_feed_id ON game_nuts (feed_id, game_id);")
             .await()
 
-        nuts.client.sql("CREATE TABLE IF NOT EXISTS player_nuts (id BIGSERIAL PRIMARY KEY, feed_id uuid NOT NULL, player_id uuid NOT NULL);")
+        nuts.client.sql("CREATE TABLE IF NOT EXISTS player_nuts (feed_id uuid NOT NULL, player_id uuid NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS idx_player_feed_id ON player_nuts (feed_id, player_id);")
             .await()
 
-        nuts.client.sql("CREATE TABLE IF NOT EXISTS team_nuts (id BIGSERIAL PRIMARY KEY, feed_id uuid NOT NULL, team_id uuid NOT NULL);")
+        nuts.client.sql("CREATE TABLE IF NOT EXISTS team_nuts (feed_id uuid NOT NULL, team_id uuid NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS idx_team_feed_id ON team_nuts (feed_id, team_id);")
             .await()
 
-        nuts.client.sql("CREATE TABLE IF NOT EXISTS event_metadata (feed_id UUID NOT NULL PRIMARY KEY, created BIGINT NOT NULL, season INT NOT NULL, tournament INT NOT NULL, type INT NOT NULL, day INT NOT NULL, phase INT NOT NULL, category INT NOT NULL)")
+        nuts.client.sql("CREATE TABLE IF NOT EXISTS event_metadata (feed_id UUID NOT NULL, created BIGINT NOT NULL, season INT NOT NULL, tournament INT NOT NULL, type INT NOT NULL, day INT NOT NULL, phase INT NOT NULL, category INT NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS idx_event_metadata_feed_type ON event_metadata (feed_id, type);")
             .await()
 
         nuts.client.sql("CREATE TABLE IF NOT EXISTS snow_crystals (snow_id BIGINT NOT NULL PRIMARY KEY, uuid UUID NOT NULL);")
@@ -109,7 +110,13 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
         nuts.client.sql("CREATE TABLE IF NOT EXISTS metadata_collection (feed_id UUID not null PRIMARY KEY, data json, cleared BOOLEAN NOT NULL DEFAULT FALSE);")
             .await()
 
-        nuts.client.sql("CREATE TABLE IF NOT EXISTS storytime (feed_id UUID NOT NULL PRIMARY KEY, story_id UUID NOT NULL)")
+        nuts.client.sql("CREATE TABLE IF NOT EXISTS feed_sources (feed_id UUID NOT NULL, source_id UUID, source_type SMALLINT NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS idx_feed_sources_id ON feed_sources (feed_id, source_id, source_type);")
+            .await()
+
+        nuts.client.sql("CREATE TABLE IF NOT EXISTS detective_work (feed_id UUID NOT NULL, source_id UUID, source_type SMALLINT NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS idx_detective_work ON detective_work (feed_id, source_id, source_type);")
+            .await()
+
+        nuts.client.sql("CREATE TABLE IF NOT EXISTS herring_pools (feed_id UUID PRIMARY KEY, first_discovered BIGINT NOT NULL)")
             .await()
 
 //        try {
@@ -247,7 +254,9 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
                         else -> category.toIntOrNull()
                     }
 
-                    add(ShellSource.GlobalFeed(loopEvery.seconds, limit, delay.milliseconds, totalLimit, http, logger, sortBy = sortBy, category = category))
+                    val type = element.getIntOrNull("feed_type")
+
+                    add(ShellSource.GlobalFeed(loopEvery.seconds, limit, delay.milliseconds, totalLimit, http, logger, sortBy = sortBy, category = category, type = type))
                 }
                 "team" -> {
                     val teamName = element.getString("team")
@@ -281,14 +290,16 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
                         else -> category.toIntOrNull()
                     }
 
+                    val type = element.getIntOrNull("feed_type")
+
                     if (teamName.equals("all", true)) {
                         teams.forEach { team ->
-                            add(ShellSource.TeamFeed(team.id.id, loopEvery.seconds, limit, delay.milliseconds, totalLimit, http, logger, sortBy = sortBy, category = category))
+                            add(ShellSource.TeamFeed(team.id.id, loopEvery.seconds, limit, delay.milliseconds, totalLimit, http, logger, sortBy = sortBy, category = category, type = type))
                         }
                     } else {
                         teams.firstOrNull { team -> team.nickname.equals(teamName, true) || team.location.equals(teamName, true) || team.fullName.equals(teamName, true) }
-                            ?.let { add(ShellSource.TeamFeed(it.id.id, loopEvery.seconds, limit, delay.milliseconds, totalLimit, http, logger, sortBy = sortBy, category = category)) }
-                        ?: add(ShellSource.TeamFeed(teamName, loopEvery.seconds, limit, delay.milliseconds, totalLimit, http, logger, sortBy = sortBy, category = category))
+                            ?.let { add(ShellSource.TeamFeed(it.id.id, loopEvery.seconds, limit, delay.milliseconds, totalLimit, http, logger, sortBy = sortBy, category = category, type = type)) }
+                        ?: add(ShellSource.TeamFeed(teamName, loopEvery.seconds, limit, delay.milliseconds, totalLimit, http, logger, sortBy = sortBy, category = category, type = type))
                     }
                 }
                 "player" -> {
@@ -323,8 +334,10 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
                         else -> category.toIntOrNull()
                     }
 
-                    players[playerName]?.let { playerID -> add(ShellSource.PlayerFeed(playerID.id, loopEvery.seconds, limit, delay.milliseconds, totalLimit, http, logger, sortBy = sortBy, category = category)) }
-                    ?: add(ShellSource.PlayerFeed(playerName, loopEvery.seconds, limit, delay.milliseconds, totalLimit, http, logger, sortBy = sortBy, category = category))
+                    val type = element.getIntOrNull("feed_type")
+
+                    players[playerName]?.let { playerID -> add(ShellSource.PlayerFeed(playerID.id, loopEvery.seconds, limit, delay.milliseconds, totalLimit, http, logger, sortBy = sortBy, category = category, type = type)) }
+                    ?: add(ShellSource.PlayerFeed(playerName, loopEvery.seconds, limit, delay.milliseconds, totalLimit, http, logger, sortBy = sortBy, category = category, type = type))
                 }
                 "game" -> {
                     val gameID = element.getString("game")
@@ -358,7 +371,9 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
                         else -> category.toIntOrNull()
                     }
 
-                    add(ShellSource.GameFeed(gameID, loopEvery.seconds, limit, delay.milliseconds, totalLimit, http, logger, sortBy = sortBy, category = category))
+                    val type = element.getIntOrNull("feed_type")
+
+                    add(ShellSource.GameFeed(gameID, loopEvery.seconds, limit, delay.milliseconds, totalLimit, http, logger, sortBy = sortBy, category = category, type = type))
                 }
                 "story" -> {
                     val storyID = element.getString("story")
@@ -392,8 +407,84 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
                         else -> category.toIntOrNull()
                     }
 
-                    add(ShellSource.StoryFeed(storyID, loopEvery.seconds, limit, delay.milliseconds, totalLimit, http, logger, sortBy = sortBy, category = category))
+                    val type = element.getIntOrNull("feed_type")
+
+                    add(ShellSource.StoryFeed(storyID, loopEvery.seconds, limit, delay.milliseconds, totalLimit, http, logger, sortBy = sortBy, category = category, type = type))
                 }
+
+                "all_players" -> {
+                    val name = element.getStringOrNull("name")
+
+                    val logger = LoggerFactory.getLogger(element.getStringOrNull("logger_name") ?: "dev.brella.blasement.upnut.ingest.${name ?: "AllPlayers"}")
+
+                    val limit = getIntInScope(element, "limit", 100)
+                    val loopEvery = getIntInScope(element, "loop_duration_s", 60)
+                    val delay = getLongInScope(element, "delay_ms", 100)
+                    val delayBetweenPlayers = getLongInScope(element, "delay_between_ms", 100)
+                    val delayOnFailure = getLongInScope(element, "delay_on_failure_ms", 100)
+                    val totalLimit = getLongInScope(element, "total_limit", Long.MAX_VALUE)
+
+                    val sortBy = when (val sortBy = element.getStringOrNull("sort_by")?.toLowerCase()) {
+                        "newest" -> 0
+                        "oldest" -> 1
+                        "top" -> 2
+                        "hot" -> 3
+                        null -> 3
+                        else -> sortBy.toIntOrNull() ?: 3
+                    }
+
+                    val category = when (val category = element.getStringOrNull("category")?.toLowerCase()) {
+                        "plays" -> 0
+                        "changes" -> 1
+                        "special" -> 2
+                        "outcomes" -> 3
+                        "book_feed" -> 4
+                        "null" -> null
+                        null -> null
+                        else -> category.toIntOrNull()
+                    }
+
+                    val type = element.getIntOrNull("feed_type")
+
+                    add(ShellSource.AllPlayers(loopEvery.seconds, limit, delay.milliseconds, delayBetweenPlayers.milliseconds, totalLimit, http, logger, sortBy = sortBy, category = category, type = type))
+                }
+                "running_games" -> {
+                    val name = element.getStringOrNull("name")
+
+                    val logger = LoggerFactory.getLogger(element.getStringOrNull("logger_name") ?: "dev.brella.blasement.upnut.ingest.${name ?: "RunningGames"}")
+
+                    val limit = getIntInScope(element, "limit", 100)
+                    val loopEvery = getIntInScope(element, "loop_duration_s", 60)
+                    val delay = getLongInScope(element, "delay_ms", 100)
+                    val delayBetweenGames = getLongInScope(element, "delay_between_ms", 100)
+                    val delayOnFailure = getLongInScope(element, "delay_on_failure_ms", 100)
+                    val totalLimit = getLongInScope(element, "total_limit", Long.MAX_VALUE)
+
+                    val sortBy = when (val sortBy = element.getStringOrNull("sort_by")?.toLowerCase()) {
+                        "newest" -> 0
+                        "oldest" -> 1
+                        "top" -> 2
+                        "hot" -> 3
+                        null -> 3
+                        else -> sortBy.toIntOrNull() ?: 3
+                    }
+
+                    val category = when (val category = element.getStringOrNull("category")?.toLowerCase()) {
+                        "plays" -> 0
+                        "changes" -> 1
+                        "special" -> 2
+                        "outcomes" -> 3
+                        "book_feed" -> 4
+                        "null" -> null
+                        null -> null
+                        else -> category.toIntOrNull()
+                    }
+
+                    val type = element.getIntOrNull("feed_type")
+
+                    add(ShellSource.RunningGames(loopEvery.seconds, limit, delay.milliseconds, delayBetweenGames.milliseconds, totalLimit, http, logger, sortBy = sortBy, category = category, type = type))
+                }
+
                 "librarian" -> {
                     val name = element.getStringOrNull("name")
 
@@ -426,6 +517,40 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
                     }
 
                     add(ShellSource.Librarian(loopEvery.seconds, limit, delay.milliseconds, totalLimit, http, nuts.client, logger, sortBy = sortBy, category = category))
+                }
+                "liquid_friend" -> {
+                    val name = element.getStringOrNull("name")
+
+                    val logger = LoggerFactory.getLogger(element.getStringOrNull("logger_name") ?: "dev.brella.blasement.upnut.ingest.${name ?: "LiquidFriend"}")
+
+                    val limit = getIntInScope(element, "limit", 100)
+                    val loopEvery = getIntInScope(element, "loop_duration_s", 60)
+                    val delay = getLongInScope(element, "delay_ms", 100)
+                    val delayBetweenFaxes = getLongInScope(element, "delay_between_sources", 100)
+                    val delayOnFailure = getLongInScope(element, "delay_on_failure_ms", 100)
+                    val totalLimit = getLongInScope(element, "total_limit", Long.MAX_VALUE)
+
+                    val sortBy = when (val sortBy = element.getStringOrNull("sort_by")?.toLowerCase()) {
+                        "newest" -> 0
+                        "oldest" -> 1
+                        "top" -> 2
+                        "hot" -> 3
+                        null -> 3
+                        else -> sortBy.toIntOrNull() ?: 3
+                    }
+
+                    val category = when (val category = element.getStringOrNull("category")?.toLowerCase()) {
+                        "plays" -> 0
+                        "changes" -> 1
+                        "special" -> 2
+                        "outcomes" -> 3
+                        "book_feed" -> 4
+                        "null" -> null
+                        null -> null
+                        else -> category.toIntOrNull()
+                    }
+
+                    add(ShellSource.LiquidFriend(loopEvery.seconds, limit, delay.milliseconds, delayBetweenFaxes.milliseconds, totalLimit, http, nuts.client, logger, sortBy = sortBy, category = category))
                 }
                 else -> ingestLogger.error("No ingest type by name of '{}'", sourceType)
             }
@@ -520,9 +645,9 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
     }*/
 
     @OptIn(ObsoleteCoroutinesApi::class, ExperimentalTime::class)
-    val actor = actor<Pair<Long, List<UpNutEvent>>> {
+    val actor = actor<UpNutIngest> {
         var lastTime: Long = now()
-        val list: MutableList<Pair<Long, List<UpNutEvent>>> = ArrayList()
+        val list: MutableList<UpNutIngest> = ArrayList()
         var swapping = false
 
         val receiveJob = receiveAsFlow().onEach { while (swapping) yield(); list.add(it) }.launchIn(this)
@@ -542,53 +667,68 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
             println(
                 "Ingest complete in ${
                     measureTime {
-                        events.flatMap(Pair<Long, List<UpNutEvent>>::second)
-                            .distinctBy(UpNutEvent::id)
-                            .let { events ->
-                                val timeTaken = measureTime {
-                                    processEvents(events)
-                                }
+                        val eventMetadataJob = launch {
+                            events.flatMap(UpNutIngest::events)
+                                .distinctBy(UpNutEvent::id)
+                                .let { events ->
+                                    val timeTaken = measureTime {
+                                        processEvents(events)
+                                    }
 
-                                sendToFinally(events)
-                                ingestLogger.trace("Processed events in {}", timeTaken)
+                                    sendToFinally(events)
+                                    ingestLogger.trace("Processed events in {}", timeTaken)
+                                }
+                        }
+
+                        val plasmaAgencyJob = launch {
+                            val timeTaken = measureTime {
+                                processPlasmaVoicemail(events)
                             }
 
-                        events
-                            .groupBy(Pair<Long, List<UpNutEvent>>::first, Pair<Long, List<UpNutEvent>>::second)
-                            .mapValues { (_, list) -> list.flatten().distinctBy(UpNutEvent::id) }
-                            .entries
-                            .sortedBy(Map.Entry<Long, List<UpNutEvent>>::key)
-                            .forEach { (time, events) ->
-                                if (time <= lastTime) {
-                                    ingestLogger.warn("ERR: Backwards time travel; going from {} to {} ??", lastTime, time)
-                                    return@forEach
+                            ingestLogger.trace("Processed Plasma's Voicemails in {}", timeTaken)
+                        }
+
+                        val shellsAndScalesJob = launch {
+                            events
+                                .groupBy(UpNutIngest::time, UpNutIngest::events)
+                                .mapValues { (_, list) -> list.flatten().distinctBy(UpNutEvent::id) }
+                                .entries
+                                .sortedBy(Map.Entry<Long, List<UpNutEvent>>::key)
+                                .forEach { (time, events) ->
+                                    if (time <= lastTime) {
+                                        ingestLogger.warn("ERR: Backwards time travel; going from {} to {} ??", lastTime, time)
+                                        return@forEach
+                                    }
+
+                                    val newEvents = events.filter { event ->
+                                        val before = existing[event.id] ?: return@filter true
+
+                                        val beforeNuts = (before and 0xFFFFFFFF).toInt()
+                                        val beforeScales = (before shr 32).toInt()
+
+                                        val eventNuts = event.nuts.intOrNull ?: 0
+                                        val eventScales = event.scales.intOrNull ?: 0
+
+                                        return@filter eventNuts > beforeNuts || eventScales > beforeScales
+                                    }
+
+                                    if (newEvents.isEmpty()) return@forEach
+
+                                    val timeTaken = measureTime { processNuts(time, newEvents) }
+                                    ingestLogger.trace("Processing complete in {}", timeTaken)
+                                    newEvents.forEach { event ->
+                                        existing[event.id] = (event.nuts.longOrNull?.and(0xFFFFFFFF) ?: 0) or (event.scales.longOrNull?.shl(32) ?: 0)
+                                    }
+
+                                    lastTime = time
                                 }
+                        }
 
-                                val newEvents = events.filter { event ->
-                                    val before = existing[event.id] ?: return@filter true
-
-                                    val beforeNuts = (before and 0xFFFFFFFF).toInt()
-                                    val beforeScales = (before shr 32).toInt()
-
-                                    val eventNuts = event.nuts.intOrNull ?: 0
-                                    val eventScales = event.scales.intOrNull ?: 0
-
-                                    return@filter eventNuts > beforeNuts || eventScales > beforeScales
-                                }
-
-                                if (newEvents.isEmpty()) return@forEach
-
-                                val timeTaken = measureTime { processNuts(time, newEvents) }
-                                ingestLogger.trace("Processing complete in {}", timeTaken)
-                                newEvents.forEach { event ->
-                                    existing[event.id] = (event.nuts.longOrNull?.and(0xFFFFFFFF) ?: 0) or (event.scales.longOrNull?.shl(32) ?: 0)
-                                }
-
-                                lastTime = time
-                            }
+                        shellsAndScalesJob.join()
+                        plasmaAgencyJob.join()
+                        eventMetadataJob.join()
                     }
                 }")
-
         }
     }
 
@@ -760,7 +900,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
     }
 
     inner class NutBuilder {
-        suspend inline fun players(event: UpNutEvent) {
+/*        suspend inline fun players(event: UpNutEvent) {
             val players = nuts.client.sql("SELECT player_id FROM player_nuts WHERE feed_id = $1")
                               .bind("$1", event.id)
                               .fetch()
@@ -777,49 +917,6 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
                         .await()
                 }
         }
-
-        @OptIn(ExperimentalTime::class)
-        suspend inline fun players(events: List<UpNutEvent>) {
-            val playerMap = measureTimedValue {
-                nuts.client.sql("SELECT feed_id, player_id FROM player_nuts WHERE feed_id = ANY($1)")
-                    .bind("$1", Array(events.size) { events[it].id })
-                    .map { row -> Pair(row.getValue<UUID>("feed_id"), row.getValue<UUID>("player_id")) }
-                    .all()
-                    .collectList()
-                    .awaitFirstOrNull()
-                    ?.groupBy(Pair<UUID, UUID>::first, Pair<UUID, UUID>::second)
-            }.let { println("Players Map: ${it.duration}"); it.value }
-                            ?: emptyMap()
-
-
-            try {
-                nuts.client.inConnectionAwait { connection ->
-                    events.chunked(100).forEach { chunk ->
-                        val statement = connection
-                            .createStatement("INSERT INTO player_nuts (feed_id, player_id) VALUES ($1, $2)")
-
-                        var count = 0
-                        chunk.forEach { event ->
-                            val players = playerMap[event.id] ?: emptyList()
-
-                            event.playerTags?.filterNot(players::contains)
-                                ?.forEach { playerID ->
-                                    count++
-                                    statement
-                                        .bind(0, event.id)
-                                        .bind(1, playerID)
-                                        .add()
-                                }
-                        }
-
-                        if (count > 0) statement.awaitRowsUpdated()
-                    }
-                }
-            } catch (th: Throwable) {
-                th.printStackTrace()
-            }
-        }
-
         suspend inline fun games(event: UpNutEvent) {
             val games = nuts.client.sql("SELECT game_id FROM game_nuts WHERE feed_id = $1")
                             .bind("$1", event.id)
@@ -829,44 +926,11 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
                             .collectList()
                             .awaitFirstOrNull() ?: emptyList()
 
-            event.gameTags?.filterNot(games::contains)
-                ?.forEach { gameID ->
-                    nuts.client.sql("INSERT INTO game_nuts (feed_id, game_id) VALUES ($1, $2)")
-                        .bind("$1", event.id)
-                        .bind("$2", gameID)
-                        .await()
-                }
-        }
-
-        suspend inline fun games(events: List<UpNutEvent>) {
-            val gamesMap = nuts.client.sql("SELECT feed_id, game_id FROM game_nuts WHERE feed_id = ANY($1)")
-                               .bind("$1", Array(events.size) { events[it].id })
-                               .map { row -> Pair(row.getValue<UUID>("feed_id"), row.getValue<UUID>("game_id")) }
-                               .all()
-                               .collectList()
-                               .awaitFirstOrNull()
-                               ?.groupBy(Pair<UUID, UUID>::first, Pair<UUID, UUID>::second)
-                           ?: emptyMap()
-
-            nuts.client.inConnectionAwait { connection ->
-                events.chunked(100).forEach { chunk ->
-                    val statement = connection.createStatement("INSERT INTO game_nuts (feed_id, game_id) VALUES ($1, $2)")
-                    var count = 0
-                    chunk.forEach { event ->
-                        val games = gamesMap[event.id] ?: emptyList()
-
-                        event.gameTags?.filterNot(games::contains)
-                            ?.forEach { gameID ->
-                                count++
-                                statement
-                                    .bind("$1", event.id)
-                                    .bind("$2", gameID)
-                                    .add()
-                            }
-                    }
-
-                    if (count > 0) statement.awaitRowsUpdated()
-                }
+            event.gameTags?.forEach { gameID ->
+                nuts.client.sql("INSERT INTO game_nuts (feed_id, game_id) VALUES ($1, $2) ON CONFLICT (feed_id, game_id) DO NOTHING")
+                    .bind("$1", event.id)
+                    .bind("$2", gameID)
+                    .await()
             }
         }
 
@@ -879,49 +943,16 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
                             .collectList()
                             .awaitFirstOrNull() ?: emptyList()
 
-            event.teamTags?.filterNot(teams::contains)
-                ?.forEach { teamID ->
-                    nuts.client.sql("INSERT INTO team_nuts (feed_id, team_id) VALUES ($1, $2)")
-                        .bind("$1", event.id)
-                        .bind("$2", teamID)
-                        .await()
-                }
-        }
-
-        suspend inline fun teams(events: List<UpNutEvent>) {
-            val teamsMap = nuts.client.sql("SELECT feed_id, team_id FROM team_nuts WHERE feed_id = ANY($1)")
-                               .bind("$1", Array(events.size) { events[it].id })
-                               .map { row -> Pair(row.getValue<UUID>("feed_id"), row.getValue<UUID>("team_id")) }
-                               .all()
-                               .collectList()
-                               .awaitFirstOrNull()
-                               ?.groupBy(Pair<UUID, UUID>::first, Pair<UUID, UUID>::second)
-                           ?: emptyMap()
-
-            nuts.client.inConnectionAwait { connection ->
-                events.chunked(100).forEach { chunk ->
-                    val insertNuts = connection.createStatement("INSERT INTO team_nuts (feed_id, team_id) VALUES (\$1, \$2)")
-                    var insertCount = 0
-                    chunk.forEach { event ->
-                        val teams = teamsMap[event.id] ?: emptyList()
-
-                        event.teamTags?.filterNot(teams::contains)
-                            ?.forEach { teamID ->
-                                insertCount++
-                                insertNuts
-                                    .bind("$1", event.id)
-                                    .bind("$2", teamID)
-                                    .add()
-                            }
-                    }
-
-                    if (insertCount > 0) insertNuts.awaitRowsUpdated()
-                }
+            event.teamTags?.forEach { teamID ->
+                nuts.client.sql("INSERT INTO team_nuts (feed_id, team_id) VALUES ($1, $2) ON CONFLICT (feed_id, team_id) DO NOTHING")
+                    .bind("$1", event.id)
+                    .bind("$2", teamID)
+                    .await()
             }
         }
 
         suspend inline fun metadata(event: UpNutEvent) {
-            nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT DO NOTHING")
+            nuts.client.sql("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) ON CONFLICT (feed_id, type) DO NOTHING")
                 .bind("$1", event.id)
                 .bind("$2", event.created.toEpochMilliseconds())
                 .bind("$3", event.season)
@@ -932,37 +963,179 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
                 .bind("$8", event.category)
                 .await()
         }
+        */
+
+        val playersCache: MutableMap<UUID, List<UUID>> = HashMap()
+        val teamsCache: MutableMap<UUID, List<UUID>> = HashMap()
+        val gamesCache: MutableMap<UUID, List<UUID>> = HashMap()
+        val eventMetadataCache: MutableMap<UUID, Int> = HashMap()
 
         @OptIn(ExperimentalTime::class)
-        suspend inline fun metadata(events: List<UpNutEvent>) {
-            val missingData = nuts.client.sql("SELECT feed_id FROM metadata_collection WHERE feed_id = ANY($1) AND data IS NULL")
-                                  .bind("$1", Array(events.size) { events[it].id })
-                                  .map { row -> row.getValue<UUID>("feed_id") }
-                                  .all()
-                                  .collectList()
-                                  .awaitFirstOrNull()
-                              ?: emptyList()
+        suspend inline fun players(events: List<UpNutEvent>) {
+            /*val playerMap = measureTimedValue {
+                nuts.client.sql("SELECT feed_id, player_id FROM player_nuts WHERE feed_id = ANY($1)")
+                    .bind("$1", Array(events.size) { events[it].id })
+                    .map { row -> Pair(row.getValue<UUID>("feed_id"), row.getValue<UUID>("player_id")) }
+                    .all()
+                    .collectList()
+                    .awaitFirstOrNull()
+                    ?.groupBy(Pair<UUID, UUID>::first, Pair<UUID, UUID>::second)
+            }.let { println("Players Map: ${it.duration}"); it.value }
+                            ?: emptyMap()*/
+
+
+            try {
+                nuts.client.inConnectionAwait { connection ->
+                    events.chunked(100).forEach { chunk ->
+                        val statement = connection
+                            .createStatement("INSERT INTO player_nuts (feed_id, player_id) VALUES ($1, $2) ON CONFLICT (feed_id, player_id) DO NOTHING")
+
+                        var count = 0
+                        chunk.forEach { event ->
+//                            val players = playerMap[event.id] ?: emptyList()
+
+
+                            event.playerTags
+                                ?.let { eventPlayers ->
+                                    val players = playersCache[event.id] ?: emptyList()
+
+                                    eventPlayers.forEach event@{ playerID ->
+                                        if (playerID in players) return@event
+
+                                        count++
+                                        statement
+                                            .bind(0, event.id)
+                                            .bind(1, playerID)
+                                            .add()
+                                    }
+
+                                    playersCache[event.id] = eventPlayers
+                                }
+                        }
+
+                        if (count > 0) statement.awaitRowsUpdated()
+                    }
+                }
+            } catch (th: Throwable) {
+                th.printStackTrace()
+            }
+        }
+
+        suspend inline fun games(events: List<UpNutEvent>) {
+            /*val gamesMap = nuts.client.sql("SELECT feed_id, game_id FROM game_nuts WHERE feed_id = ANY($1)")
+                               .bind("$1", Array(events.size) { events[it].id })
+                               .map { row -> Pair(row.getValue<UUID>("feed_id"), row.getValue<UUID>("game_id")) }
+                               .all()
+                               .collectList()
+                               .awaitFirstOrNull()
+                               ?.groupBy(Pair<UUID, UUID>::first, Pair<UUID, UUID>::second)
+                           ?: emptyMap()*/
 
             nuts.client.inConnectionAwait { connection ->
                 events.chunked(100).forEach { chunk ->
+                    val statement = connection.createStatement("INSERT INTO game_nuts (feed_id, game_id) VALUES ($1, $2) ON CONFLICT (feed_id, game_id) DO NOTHING")
+                    var count = 0
+                    chunk.forEach { event ->
+//                        val games = gamesMap[event.id] ?: emptyList()
+
+                        event.gameTags?.let { eventGames ->
+                            val games = gamesCache[event.id] ?: emptyList()
+
+                            eventGames.forEach event@{ gameID ->
+                                if (gameID in games) return@event
+                                count++
+                                statement
+                                    .bind("$1", event.id)
+                                    .bind("$2", gameID)
+                                    .add()
+                            }
+
+                            gamesCache[event.id] = eventGames
+                        }
+                    }
+
+                    if (count > 0) statement.awaitRowsUpdated()
+                }
+            }
+        }
+
+        suspend inline fun teams(events: List<UpNutEvent>) {
+            /*val teamsMap = nuts.client.sql("SELECT feed_id, team_id FROM team_nuts WHERE feed_id = ANY($1)")
+                               .bind("$1", Array(events.size) { events[it].id })
+                               .map { row -> Pair(row.getValue<UUID>("feed_id"), row.getValue<UUID>("team_id")) }
+                               .all()
+                               .collectList()
+                               .awaitFirstOrNull()
+                               ?.groupBy(Pair<UUID, UUID>::first, Pair<UUID, UUID>::second)
+                           ?: emptyMap()*/
+
+            nuts.client.inConnectionAwait { connection ->
+                events.chunked(100).forEach { chunk ->
+                    val insertNuts = connection.createStatement("INSERT INTO team_nuts (feed_id, team_id) VALUES (\$1, \$2) ON CONFLICT (feed_id, team_id) DO NOTHING")
+                    var insertCount = 0
+                    chunk.forEach { event ->
+//                        val teams = teamsMap[event.id] ?: emptyList()
+
+                        event.teamTags?.let { eventTeams ->
+                            val teams = teamsCache[event.id] ?: emptyList()
+
+                            eventTeams.forEach event@{ teamID ->
+                                if (teamID in teams) return@event
+
+                                insertCount++
+                                insertNuts
+                                    .bind("$1", event.id)
+                                    .bind("$2", teamID)
+                                    .add()
+                            }
+
+                            teamsCache[event.id] = eventTeams
+                        }
+                    }
+
+                    if (insertCount > 0) insertNuts.awaitRowsUpdated()
+                }
+            }
+        }
+
+        @OptIn(ExperimentalTime::class)
+        suspend inline fun metadata(events: List<UpNutEvent>) {
+            nuts.client.inConnectionAwait { connection ->
+                events.chunked(100).forEach { chunk ->
                     val statement =
-                        connection.createStatement("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( \$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8 ) ON CONFLICT (feed_id) DO UPDATE SET created = $2, season = $3, tournament = $4, type = $5, day = $6, phase = $7, category = $8")
+                        connection.createStatement("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( \$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8 ) ON CONFLICT (feed_id, type) DO NOTHING")
+
+                    val missingData = connection.createStatement("SELECT feed_id FROM metadata_collection WHERE feed_id = ANY($1) AND data IS NULL")
+                                          .bind("$1", Array(chunk.size) { chunk[it].id })
+                                          .execute()
+                                          .let { Mono.from(it) }
+                                          .flatMapMany { result -> result.map { row, _ -> row.getValue<UUID>("feed_id") } }
+                                          .collectList()
+                                          .awaitFirstOrNull()
+                                      ?: emptyList()
 
                     val missingInsertStatement =
                         connection.createStatement("UPDATE metadata_collection SET data = $2 WHERE feed_id = $1")
                     var missingInsertCount = 0
+                    var insert = 0
 
                     chunk.forEach { event ->
-                        statement
-                            .bind("$1", event.id)
-                            .bind("$2", event.created.toEpochMilliseconds())
-                            .bind("$3", event.season)
-                            .bind("$4", event.tournament)
-                            .bind("$5", event.type)
-                            .bind("$6", event.day)
-                            .bind("$7", event.phase)
-                            .bind("$8", event.category)
-                            .add()
+                        if (event.type != eventMetadataCache[event.id]) {
+                            statement
+                                .bind("$1", event.id)
+                                .bind("$2", event.created.toEpochMilliseconds())
+                                .bind("$3", event.season)
+                                .bind("$4", event.tournament)
+                                .bind("$5", event.type)
+                                .bind("$6", event.day)
+                                .bind("$7", event.phase)
+                                .bind("$8", event.category)
+                                .add()
+
+                            insert++
+
+                            eventMetadataCache[event.id] = event.type
+                        }
 
                         if (event.id in missingData) {
                             ingestLogger.warn("Collecting missing event {}", event.id)
@@ -975,7 +1148,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
                         }
                     }
 
-                    statement.awaitRowsUpdated()
+                    if (insert > 0) statement.awaitRowsUpdated()
                     if (missingInsertCount > 0) missingInsertStatement.awaitRowsUpdated()
                 }
             }
@@ -1299,6 +1472,109 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
                 }
             }
         }
+    }
+
+    val sourcesCache: MutableMap<BlaseballSource, MutableList<UUID>> = HashMap()
+    val detectiveCache: MutableMap<BlaseballSource, MutableList<UUID>> = HashMap()
+
+    suspend fun processPlasmaVoicemail(voicemails: Array<UpNutIngest>) {
+        //First piece of work -- do we have any new herring pools ?
+
+        val meetingCalledAt = now()
+
+        val viableHerringSources: MutableList<UpNutEvent> = ArrayList<UpNutEvent>().apply {
+            voicemails.forEach { ingest -> ingest.events.forEach { event -> if (event.type == 175 && none { it.id == event.id }) add(event) } }
+        }
+
+        val existingPools = nuts.client.sql("SELECT feed_id FROM herring_pools WHERE feed_id = ANY($1)")
+                                .bind("$1", Array(viableHerringSources.size) { viableHerringSources[it].id })
+                                .map { row -> row.getValue<UUID>("feed_id") }
+                                .all()
+                                .collectList()
+                                .awaitFirstOrNull() ?: emptyList()
+
+        val newHerring = viableHerringSources.filterNot { existingPools.contains(it.id) }
+
+        newHerring
+            .forEach { source ->
+                nuts.client.sql("INSERT INTO herring_pools (feed_id, first_discovered) VALUES ($1, $2)")
+                    .bind("$1", source.id)
+                    .bind("$2", meetingCalledAt)
+                    .await()
+
+                postEvent(WebhookEvent.NewHerringPool(source, meetingCalledAt), WebhookEvent.NEW_HERRING_POOL)
+            }
+
+
+        nuts.client.inConnectionAwait { connection ->
+            voicemails.forEach { ingest ->
+                val feedSourcesStatement = connection.createStatement("INSERT INTO feed_sources (feed_id, source_id, source_type) VALUES ($1, $2, $3) ON CONFLICT (feed_id, source_id, source_type) DO NOTHING")
+                var feedSourcesCount = 0
+
+                val detectiveWorkStatement = connection.createStatement("INSERT INTO detective_work (feed_id, source_id, source_type) VALUES ($1, $2, $3) ON CONFLICT (feed_id, source_id, source_type) DO NOTHING")
+                var detectiveWorkCount = 0
+
+                val existingFeedForSource = sourcesCache.computeIfAbsent(ingest.source) { ArrayList() }
+                val existingWorkForSource = detectiveCache.computeIfAbsent(ingest.source) { ArrayList() }
+
+                val sourceID = ingest.source.sourceID
+
+                if (sourceID == null) {
+                    ingest.events.forEach event@{ event ->
+                        //Next Step -- backtrack current events to their source
+                        if (event.id !in existingFeedForSource) {
+                            feedSourcesStatement.bind("$1", event.id)
+                                .bindNull("$2", UUID::class.java)
+                                .bind("$3", ingest.source.sourceType)
+                                .add()
+                            feedSourcesCount++
+
+                            existingFeedForSource.add(event.id)
+                        }
+
+                        // Finally, do we have any redacted events?
+                        if (event.type == -1 && event.id !in existingWorkForSource) {
+                            detectiveWorkStatement.bind("$1", event.id)
+                                .bindNull("$2", UUID::class.java)
+                                .bind("$3", ingest.source.sourceType)
+                                .add()
+
+                            detectiveWorkCount++
+                            existingWorkForSource.add(event.id)
+                        }
+                    }
+                } else {
+                    ingest.events.forEach event@{ event ->
+                        //Next Step -- backtrack current events to their source
+                        if (event.id !in existingFeedForSource) {
+                            feedSourcesStatement.bind("$1", event.id)
+                                .bind("$2", sourceID)
+                                .bind("$3", ingest.source.sourceType)
+                                .add()
+                            feedSourcesCount++
+
+                            existingFeedForSource.add(event.id)
+                        }
+
+                        // Finally, do we have any redacted events?
+                        if (event.type == -1 && event.id !in existingWorkForSource) {
+                            detectiveWorkStatement.bind("$1", event.id)
+                                .bind("$2", sourceID)
+                                .bind("$3", ingest.source.sourceType)
+                                .add()
+                            detectiveWorkCount++
+
+                            existingWorkForSource.add(event.id)
+                        }
+                    }
+                }
+
+                if (feedSourcesCount > 0) feedSourcesStatement.awaitRowsUpdated()
+                if (detectiveWorkCount > 0) detectiveWorkStatement.awaitRowsUpdated()
+            }
+        }
+
+        //Meeting Adjourned
     }
 
     suspend fun join() {

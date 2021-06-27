@@ -14,4 +14,5 @@
 
     <logger name="dev.brella.blasement.upnut.NutIngestation" level="trace"/>
     <logger name="dev.brella.blasement.upnut.Finally" level="trace"/>
+    <logger name="dev.brella.blasement.upnut.ingest.LiquidFriend" level="trace"/>
 </configuration>

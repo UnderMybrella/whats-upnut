@@ -39,11 +39,27 @@
       "category": "book_feed"
     },
     {
+      "type": "global",
+      "name": "GlobalFishing",
+      "sort_by": "newest",
+      "feed_type": 175
+    },
+    {
       "type": "team",
       "team": "all"
     },
     {
       "type": "librarian"
+    },
+    {
+      "type": "all_players"
+    },
+    {
+      "type": "running_games"
+    },
+    {
+      "type": "liquid_friend",
+      "total_limit": 2000
     }
   ]
 }

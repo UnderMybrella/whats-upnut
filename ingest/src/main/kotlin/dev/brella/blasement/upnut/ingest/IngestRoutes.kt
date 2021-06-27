@@ -5,6 +5,8 @@ import dev.brella.kornea.blaseball.endpoints.BlaseballDatabaseService
 import io.ktor.client.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 
 suspend inline fun HttpClient.getGlobalFeed(category: Int? = null, limit: Int = 100, type: Int? = null, sort: Int? = null, start: Int? = null): List<UpNutEvent> =
     getGlobalFeedAs(category, limit, type, sort, start)
@@ -89,3 +91,12 @@ suspend inline fun <reified T> HttpClient.getStoryFeedAs(chapterID: String, cate
         if (sort != null) parameter("sort", sort)
         if (start != null) parameter("start", start)
     }
+
+@Serializable
+data class BlaseballPlayerName(val id: String, val name: String)
+
+suspend inline fun HttpClient.getAllPlayers(): List<BlaseballPlayerName> =
+    get("https://www.blaseball.com/database/playerNamesIds")
+
+suspend inline fun HttpClient.getTodaysGames(): List<JsonObject> =
+    get("https://api.sibr.dev/corsmechanics/stream/games/schedule") //thanks, me!

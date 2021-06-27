@@ -1,7 +1,5 @@
 package dev.brella.blasement.upnut.common
 
-import com.soywiz.klock.DateTimeTz
-import dev.brella.kornea.blaseball.base.common.json.BlaseballDateTimeSerialiser
 import kotlinx.datetime.Instant
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
@@ -18,6 +16,12 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import java.util.*
+
+data class UpNutIngest(
+    val time: Long,
+    val source: BlaseballSource,
+    val events: List<UpNutEvent>
+)
 
 @Serializable
 data class UpNutEvent(

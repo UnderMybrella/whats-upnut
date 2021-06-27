@@ -19,6 +19,8 @@ sealed class WebhookEvent {
         const val THRESHOLD_PASSED_SCALES = 1 shl 5
 
         const val LIBRARY_CHAPTER_REMOVED = 1 shl 6
+
+        const val NEW_HERRING_POOL = 1 shl 7
     }
 
     @Serializable
@@ -51,4 +53,8 @@ sealed class WebhookEvent {
     @Serializable
     @SerialName("THRESHOLD_PASSED_SCALES")
     data class ThresholdPassedScales(val threshold: Int, val time: Long, val event: UpNutEvent): WebhookEvent()
+
+    @Serializable
+    @SerialName("NEW_HERRING_POOL")
+    data class NewHerringPool(val event: UpNutEvent, val firstDiscovered: Long): WebhookEvent()
 }

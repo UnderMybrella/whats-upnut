@@ -61,6 +61,16 @@
     },
     {
       "type": "librarian"
+    },
+    {
+      "type": "all_players"
+    },
+    {
+      "type": "running_games"
+    },
+    {
+      "type": "liquid_friend",
+      "total_limit": 2000
     }
   ]
 }
