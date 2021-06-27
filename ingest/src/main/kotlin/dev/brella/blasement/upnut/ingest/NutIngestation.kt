@@ -82,39 +82,59 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
     val processEvents: suspend (events: List<UpNutEvent>) -> Unit = NutBuilder().buildEventProcessing()
     val processNuts: suspend (time: Long, events: List<UpNutEvent>) -> Unit = NutBuilder().buildNutProcessing()
 
+    inline fun <T> runAndPrint(block: () -> T): T? =
+        try { block() } catch (th: Throwable) { th.printStackTrace(); null }
+
     val initJob = launch {
-        nuts.client.sql("CREATE TABLE IF NOT EXISTS upnuts (id BIGSERIAL PRIMARY KEY, nuts INT, scales INT, feed_id uuid NOT NULL, source uuid, provider uuid NOT NULL, time BIGINT NOT NULL)")
-            .await()
+        runAndPrint {
+            nuts.client.sql("CREATE TABLE IF NOT EXISTS upnuts (id BIGSERIAL PRIMARY KEY, nuts INT, scales INT, feed_id uuid NOT NULL, source uuid, provider uuid NOT NULL, time BIGINT NOT NULL)")
+                .await()
+        }
 
-        nuts.client.sql("CREATE TABLE IF NOT EXISTS game_nuts (feed_id uuid NOT NULL, game_id uuid NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS idx_game_feed_id ON game_nuts (feed_id, game_id);")
-            .await()
+        runAndPrint {
+            nuts.client.sql("CREATE TABLE IF NOT EXISTS game_nuts (feed_id uuid NOT NULL, game_id uuid NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS idx_game_feed_id ON game_nuts (feed_id, game_id);")
+                .await()
+        }
 
-        nuts.client.sql("CREATE TABLE IF NOT EXISTS player_nuts (feed_id uuid NOT NULL, player_id uuid NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS idx_player_feed_id ON player_nuts (feed_id, player_id);")
-            .await()
+        runAndPrint {
+            nuts.client.sql("CREATE TABLE IF NOT EXISTS player_nuts (feed_id uuid NOT NULL, player_id uuid NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS idx_player_feed_id ON player_nuts (feed_id, player_id);")
+                .await()
+        }
 
-        nuts.client.sql("CREATE TABLE IF NOT EXISTS team_nuts (feed_id uuid NOT NULL, team_id uuid NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS idx_team_feed_id ON team_nuts (feed_id, team_id);")
-            .await()
+        runAndPrint {
+            nuts.client.sql("CREATE TABLE IF NOT EXISTS team_nuts (feed_id uuid NOT NULL, team_id uuid NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS idx_team_feed_id ON team_nuts (feed_id, team_id);")
+                .await()
+        }
 
-        nuts.client.sql("CREATE TABLE IF NOT EXISTS event_metadata (feed_id UUID NOT NULL, created BIGINT NOT NULL, season INT NOT NULL, tournament INT NOT NULL, type INT NOT NULL, day INT NOT NULL, phase INT NOT NULL, category INT NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS idx_event_metadata_feed_type ON event_metadata (feed_id, type);")
-            .await()
+        runAndPrint {
+            nuts.client.sql("CREATE TABLE IF NOT EXISTS event_metadata (feed_id UUID NOT NULL, created BIGINT NOT NULL, season INT NOT NULL, tournament INT NOT NULL, type INT NOT NULL, day INT NOT NULL, phase INT NOT NULL, category INT NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS idx_event_metadata_feed_type ON event_metadata (feed_id, type);")
+                .await()
+        }
 
-        nuts.client.sql("CREATE TABLE IF NOT EXISTS snow_crystals (snow_id BIGINT NOT NULL PRIMARY KEY, uuid UUID NOT NULL);")
-            .await()
+        runAndPrint {
+            nuts.client.sql("CREATE TABLE IF NOT EXISTS library (id UUID NOT NULL PRIMARY KEY, chapter_title_redacted VARCHAR(128), book_title VARCHAR(128) NOT NULL, book_index INT NOT NULL DEFAULT 0, chapter_title VARCHAR(128) NOT NULL, index_in_book INT NOT NULL, redacted BOOLEAN NOT NULL DEFAULT TRUE, exists BOOLEAN NOT NULL DEFAULT TRUE);")
+                .await()
+        }
 
-        nuts.client.sql("CREATE TABLE IF NOT EXISTS library (id UUID NOT NULL PRIMARY KEY, chapter_title_redacted VARCHAR(128), book_title VARCHAR(128) NOT NULL, book_index INT NOT NULL DEFAULT 0, chapter_title VARCHAR(128) NOT NULL, index_in_book INT NOT NULL, redacted BOOLEAN NOT NULL DEFAULT TRUE, exists BOOLEAN NOT NULL DEFAULT TRUE);")
-            .await()
+        runAndPrint {
+            nuts.client.sql("CREATE TABLE IF NOT EXISTS event_log (id BIGSERIAL PRIMARY KEY, type INT NOT NULL, data json NOT NULL, created BIGINT NOT NULL, processed BOOLEAN NOT NULL DEFAULT FALSE);")
+                .await()
+        }
 
-        nuts.client.sql("CREATE TABLE IF NOT EXISTS event_log (id BIGSERIAL PRIMARY KEY, type INT NOT NULL, data json NOT NULL, created BIGINT NOT NULL, processed BOOLEAN NOT NULL DEFAULT FALSE);")
-            .await()
+        runAndPrint {
+            nuts.client.sql("CREATE TABLE IF NOT EXISTS metadata_collection (feed_id UUID not null PRIMARY KEY, data json, cleared BOOLEAN NOT NULL DEFAULT FALSE);")
+                .await()
+        }
 
-        nuts.client.sql("CREATE TABLE IF NOT EXISTS metadata_collection (feed_id UUID not null PRIMARY KEY, data json, cleared BOOLEAN NOT NULL DEFAULT FALSE);")
-            .await()
+        runAndPrint {
+            nuts.client.sql("CREATE TABLE IF NOT EXISTS feed_sources (feed_id UUID NOT NULL, source_id UUID, source_type SMALLINT NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS idx_feed_sources_id ON feed_sources (feed_id, source_id, source_type);")
+                .await()
+        }
 
-        nuts.client.sql("CREATE TABLE IF NOT EXISTS feed_sources (feed_id UUID NOT NULL, source_id UUID, source_type SMALLINT NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS idx_feed_sources_id ON feed_sources (feed_id, source_id, source_type);")
-            .await()
-
-        nuts.client.sql("CREATE TABLE IF NOT EXISTS detective_work (feed_id UUID NOT NULL, source_id UUID, source_type SMALLINT NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS idx_detective_work ON detective_work (feed_id, source_id, source_type);")
-            .await()
+runAndPrint {
+    nuts.client.sql("CREATE TABLE IF NOT EXISTS detective_work (feed_id UUID NOT NULL, source_id UUID, source_type SMALLINT NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS idx_detective_work ON detective_work (feed_id, source_id, source_type);")
+        .await()
+}
 
         nuts.client.sql("CREATE TABLE IF NOT EXISTS herring_pools (feed_id UUID PRIMARY KEY, first_discovered BIGINT NOT NULL)")
             .await()
