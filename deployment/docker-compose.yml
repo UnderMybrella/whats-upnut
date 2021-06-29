@@ -24,6 +24,12 @@ services:
       - '9796:9796'
     networks:
       - upshell-river
+  stream:
+    image: undermybrella/upnuts-stream:latest
+    ports:
+      - '9795:9795'
+    networks:
+      - upshell-river
 
 volumes:
   postgresql_data:

@@ -2,6 +2,7 @@ package dev.brella.blasement.upnut.common
 
 import com.soywiz.klock.DateTimeTz
 import dev.brella.kornea.blaseball.base.common.json.BlaseballDateTimeSerialiser
+import kotlinx.datetime.Instant
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import java.util.*
@@ -28,7 +29,15 @@ sealed class WebhookEvent {
 
     @Serializable
     @SerialName("PING")
-    data class Ping(val time: @Serializable(BlaseballDateTimeSerialiser::class) DateTimeTz): WebhookEvent()
+    data class Ping(val time: Instant): WebhookEvent()
+
+    @Serializable
+    @SerialName("HELLO_WORLD")
+    data class HelloWorld(val time: Instant): WebhookEvent()
+
+    @Serializable
+    @SerialName("GOODBYE_WORLD")
+    data class GoodbyeWorld(val time: Instant): WebhookEvent()
 
     @Serializable
     @SerialName("NEW_LIBRARY_CHAPTERS")
