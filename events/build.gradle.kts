@@ -11,7 +11,7 @@ plugins {
 }
 
 group = "dev.brella"
-version = "1.0.0"
+version = "1.1.0"
 
 repositories {
     mavenCentral()
@@ -100,13 +100,13 @@ tasks.create<com.bmuschko.gradle.docker.tasks.image.Dockerfile>("createDockerfil
             "org.opencontainers.image.authors" to "UnderMybrella \"undermybrella@abimon.org\""
         )
     )
-    copyFile(tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJar").get().archiveFileName.get(), "/app/upnuts-query.jar")
+    copyFile(tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJar").get().archiveFileName.get(), "/app/upnuts-stream.jar")
 
     copyFile("r2dbc.json", "/app/r2dbc.json")
     copyFile("logback.xml", "/app/logback.xml")
-    copyFile("application.conf", "/app/application.conf")
+    copyFile("events.conf", "/app/events.conf")
     entryPoint("java")
-    defaultCommand("-Dlogback.configurationFile=/app/logback.xml", "-Dupnut.r2dbc=/app/r2dbc.json", "-jar", "/app/upnuts-query.jar", "-config=/app/application.conf")
+    defaultCommand("-Dlogback.configurationFile=/app/logback.xml", "-Dupnut.r2dbc=/app/r2dbc.json", "-jar", "/app/upnuts-stream.jar", "-config=/app/events.conf")
 
     exposePort(9796)
 }
@@ -117,7 +117,7 @@ tasks.create<Sync>("syncShadowJarArchive") {
     dependsOn("assemble")
     from(
         tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJar").get().archiveFile.get().asFile,
-        File(rootProject.projectDir, "deployment/application.conf"),
+        File(rootProject.projectDir, "deployment/events.conf"),
         File(rootProject.projectDir, "deployment/r2dbc.json"),
         File(rootProject.projectDir, "deployment/logback.xml")
     )
@@ -136,12 +136,12 @@ tasks.create<com.bmuschko.gradle.docker.tasks.image.DockerBuildImage>("buildImag
     dependsOn("createDockerfile")
     inputDir.set(tasks.named<com.bmuschko.gradle.docker.tasks.image.Dockerfile>("createDockerfile").get().destFile.get().asFile.parentFile)
 
-    images.addAll("undermybrella/upnuts-query:$version", "undermybrella/upnuts-query:latest")
+    images.addAll("undermybrella/upnuts-stream:$version", "undermybrella/upnuts-stream:latest")
 }
 
 tasks.create<com.bmuschko.gradle.docker.tasks.image.DockerPushImage>("pushImage") {
     group = "docker"
     dependsOn("buildImage")
 
-    images.addAll("undermybrella/upnuts-query:$version", "undermybrella/upnuts-query:latest")
+    images.addAll("undermybrella/upnuts-stream:$version", "undermybrella/upnuts-stream:latest")
 }

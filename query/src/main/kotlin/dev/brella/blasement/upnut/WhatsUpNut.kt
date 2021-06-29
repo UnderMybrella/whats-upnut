@@ -561,7 +561,6 @@ class WhatsUpNut {
                     val provider = (parameters["provider"] ?: call.request.header("X-UpNut-Provider"))?.uuidOrNull()
                     val source = (parameters["source"] ?: parameters["player"] ?: call.request.header("X-UpNut-Source") ?: call.request.header("X-UpNut-Player"))?.uuidOrNull()
 
-
                     val time = parameters["time"]?.let { time ->
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
                     } ?: call.request.header("X-UpNut-Time")?.let { time ->
@@ -608,16 +607,32 @@ class WhatsUpNut {
                                     }
                                 } else event.metadata
 
-                            map[event.id]?.let { (nuts, scales) ->
-                                if (nuts != event.nuts.intOrNull)
-                                    return@inner event.copy(nuts = JsonPrimitive(nuts), metadata = metadata)
-                                else if (scales != event.scales.intOrNull)
-                                    return@inner event.copy(metadata = metadata).apply {
-                                        this.scales = JsonPrimitive(scales)
-                                    }
-                            }
+                            var event = event.copy(metadata = metadata)
 
-                            return@inner event.copy(metadata = metadata)
+                            val resolution = map[event.id]
+                            val nuts = resolution?.first
+                            val scales = resolution?.second
+
+                            if (nuts != event.nuts.intOrNull)
+                                event = event.copy(nuts = JsonPrimitive(nuts))
+
+                            if (scales != event.scales.intOrNull)
+                                event.scales = JsonPrimitive(scales)
+
+                            (event.metadata as? JsonObject)
+                                ?.getBooleanOrNull("redacted")
+                                ?.let { isRedacted ->
+                                    if (!isRedacted && (scales == null || scales < 1_000)) {
+                                        event = event.copy(
+                                            type = -1,
+                                            category = -1,
+                                            metadata = JsonObject(mapOf("redacted" to JsonPrimitive(true), "scales" to JsonPrimitive(scales))),
+                                            nuts = JsonPrimitive(0)
+                                        )
+                                    }
+                                }
+
+                            return@inner event
                         }
                     }
                 }.respond(call)
@@ -738,17 +753,28 @@ class WhatsUpNut {
                     } ?: call.request.header("X-UpNut-Time")?.let { time ->
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
                     } ?: Instant.now(Clock.systemUTC()).toEpochMilli()
-                    val start = parameters["start"]?.toIntOrNull()
+                    val start = parameters["start"]
+                    val offset = parameters["offset"]?.toIntOrNull()
                     val sort = parameters["sort"]?.toIntOrNull()
 
                     when (sort) {
                         /** Oldest */
                         1 -> call.redirectInternally("/events") {
                             append("before", (time / 1000).toString())
-                            after?.let { append("after", (it / 1000).toString()) }
+                            if (after != null) {
+                                append("after", (after / 1000).toString())
+                            } else if (start != null) {
+                                BLASEBALL_TIME_PATTERN.tryParse(start)
+                                    ?.utc
+                                    ?.unixMillisLong
+                                    ?.let {
+                                        append("after", (it / 1000).toString())
+                                    }
+                            }
                             append("time", time.toString())
                             append("sortorder", "asc")
-                            if (start != null) append("offset", start.toString())
+                            if (offset != null) append("offset", offset.toString())
+                            else start?.toIntOrNull()?.let { append("offset", it.toString()) }
 
                             appendAll(parameters.filter { k, _ -> k.toLowerCase() !in REMOVE_PARAMETERS_GLOBAL_EVENTUALLY })
                         }
@@ -763,11 +789,19 @@ class WhatsUpNut {
 
                         /** Newest */
                         else -> call.redirectInternally("/events") {
-                            append("before", (time / 1000).toString())
+                            val timestampStart =
+                                start?.let(BLASEBALL_TIME_PATTERN::tryParse)
+                                    ?.utc
+                                    ?.unixMillisLong
+
+                            append("before", ((timestampStart ?: time) / 1000).toString())
+
+
                             after?.let { append("after", (it / 1000).toString()) }
                             append("time", time.toString())
                             append("sortorder", "desc")
-                            if (start != null) append("offset", start.toString())
+                            if (offset != null) append("offset", offset.toString())
+                            else start?.toIntOrNull()?.let { append("offset", it.toString()) }
 
                             appendAll(parameters.filter { k, _ -> k.toLowerCase() !in REMOVE_PARAMETERS_GLOBAL_EVENTUALLY })
                         }
@@ -779,7 +813,8 @@ class WhatsUpNut {
 
                     val id = parameters["id"] ?: return@get call.respondJsonObject(HttpStatusCode.BadRequest) { put("error", "No ID provided") }
                     val sort = parameters["sort"]?.toIntOrNull()
-                    val start = parameters["start"]?.toIntOrNull()
+                    val start = parameters["start"]
+                    val offset = parameters["offset"]?.toIntOrNull()
 
                     val after = parameters["after"]?.let { time ->
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
@@ -830,7 +865,9 @@ class WhatsUpNut {
 
                     val id = parameters["id"] ?: return@get call.respondJsonObject(HttpStatusCode.BadRequest) { put("error", "No ID provided") }
                     val sort = parameters["sort"]?.toIntOrNull()
-                    val start = parameters["start"]?.toIntOrNull()
+                    val start = parameters["start"]
+                    val offset = parameters["offset"]?.toIntOrNull()
+
                     val after = parameters["after"]?.let { time ->
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
                     }
@@ -880,7 +917,9 @@ class WhatsUpNut {
                     val limit = parameters["limit"]?.toIntOrNull() ?: 100
                     val type = parameters["type"]?.toIntOrNull()
                     val sort = parameters["sort"]?.toIntOrNull()
-                    val start = parameters["start"]?.toIntOrNull()
+                    val start = parameters["start"]
+                    val offset = parameters["offset"]?.toIntOrNull()
+
                     val after = parameters["after"]?.let { time ->
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
                     }
