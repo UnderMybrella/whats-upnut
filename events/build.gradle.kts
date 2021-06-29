@@ -42,6 +42,8 @@ dependencies {
     implementation("dev.brella:ktornea-utils:1.2.3-alpha")
     implementation("dev.brella:kornea-errors:2.0.3-alpha")
 
+    implementation("dev.brella:discord4j-coroutines-rest:1.2.0")
+
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.2.0")
 
     implementation("ch.qos.logback:logback-classic:1.2.3")

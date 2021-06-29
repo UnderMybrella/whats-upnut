@@ -438,12 +438,12 @@ class WhatsUpNut {
                 val events: List<JsonElement>
                 if (type == null) {
                     events = upnut.client.sql("SELECT data FROM event_log ORDER BY created DESC LIMIT 100 OFFSET $1")
-                        .bind("$1", offset?.toIntOrNull() ?: 0)
-                        .map { row -> row.getValue<String>("data") }
-                        .all()
-                        .collectList()
-                        .awaitFirstOrNull()
-                        ?.map(Json::parseToJsonElement) ?: emptyList()
+                                 .bind("$1", offset?.toIntOrNull() ?: 0)
+                                 .map { row -> row.getValue<String>("data") }
+                                 .all()
+                                 .collectList()
+                                 .awaitFirstOrNull()
+                                 ?.map(Json::parseToJsonElement) ?: emptyList()
                 } else {
                     events = upnut.client.sql("SELECT data FROM event_log WHERE type = $1 ORDER BY created DESC LIMIT 100 OFFSET $2")
                                  .bind("$1", type)
