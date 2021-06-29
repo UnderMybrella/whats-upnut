@@ -73,9 +73,9 @@ class WhatsUpNut {
         val REMOVE_PARAMETERS_GAME_EVENTUALLY = REMOVE_PARAMETERS_GLOBAL_EVENTUALLY + arrayOf("gameTags", "id")
     }
 
-    val configJson: JsonObject? = File(System.getProperty("upnut.query") ?: "upnut.json").takeIf(File::exists)?.readText()?.let(Json::decodeFromString)
-    val upnut = UpNutClient(configJson?.getJsonObjectOrNull("upnuts_r2dbc") ?: File(System.getProperty("upnut.r2dbc") ?: "upnuts-r2dbc.json").readText().let(Json::decodeFromString))
-    val eventuallie = Eventuallie(configJson?.getJsonObjectOrNull("eventually_r2dbc") ?: File(System.getProperty("upnut.eventually") ?: "eventually-r2dbc.json").readText().let(Json::decodeFromString))
+    val configJson: JsonObject? = File(property("upnut.query") ?: "upnut.json").takeIf(File::exists)?.readText()?.let(Json::decodeFromString)
+    val upnut = UpNutClient(configJson?.getJsonObjectOrNull("upnuts_r2dbc") ?: File(property("upnut.r2dbc") ?: "upnuts-r2dbc.json").readText().let(Json::decodeFromString))
+    val eventuallie = Eventuallie(configJson?.getJsonObjectOrNull("eventually_r2dbc") ?: File(property("upnut.eventually") ?: "eventually-r2dbc.json").readText().let(Json::decodeFromString))
 
     val http = HttpClient(OkHttp) {
         installGranularHttp()

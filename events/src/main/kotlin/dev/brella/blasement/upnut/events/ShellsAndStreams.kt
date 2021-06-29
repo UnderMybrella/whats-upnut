@@ -79,8 +79,8 @@ class ShellsAndStreams : CoroutineScope {
 
     override val coroutineContext: CoroutineContext = SupervisorJob() + Dispatchers.IO
 
-    val configJson: JsonObject? = File(System.getProperty("upnut.events") ?: "events.json").takeIf(File::exists)?.readText()?.let(Json::decodeFromString)
-    val upnutClient = UpNutClient(configJson?.getJsonObjectOrNull("r2dbc") ?: File(System.getProperty("upnut.r2dbc") ?: "upnuts-r2dbc.json").readText().let(Json::decodeFromString))
+    val configJson: JsonObject? = File(property("upnut.events") ?: "events.json").takeIf(File::exists)?.readText()?.let(Json::decodeFromString)
+    val upnutClient = UpNutClient(configJson?.getJsonObjectOrNull("r2dbc") ?: File(property("upnut.r2dbc") ?: "upnuts-r2dbc.json").readText().let(Json::decodeFromString))
     val http = HttpClient(OkHttp) {
         install(ContentEncoding) {
             gzip()
@@ -100,7 +100,7 @@ class ShellsAndStreams : CoroutineScope {
             userAgent("Mozilla/5.0 (X11; Linux x86_64; rv:85.0) Gecko/20100101 Firefox/85.0")
         }
     }
-    val discord = RestClient.create(configJson?.getStringOrNull("discord_token") ?: System.getProperty("upnut.discord"))
+    val discord = RestClient.create(configJson?.getStringOrNull("discord_token") ?: property("upnut.discord"))
 
     val teamDetailsCache = Caffeine.newBuilder()
         .expireAfterAccess(10, TimeUnit.MINUTES)
@@ -373,9 +373,9 @@ class ShellsAndStreams : CoroutineScope {
         }
     }
 
-    val discordClientID = requireNotNull(configJson?.getStringOrNull("discord_client_id") ?: System.getProperty("upnut.discord_client_id"))
-    val discordClientSecret = requireNotNull(configJson?.getStringOrNull("discord_client_secret") ?: System.getProperty("upnut.discord_client_secret"))
-    val discordRedirectUri = requireNotNull(configJson?.getStringOrNull("discord_redirect") ?: System.getProperty("upnut.discord_redirect"))
+    val discordClientID = requireNotNull(configJson?.getStringOrNull("discord_client_id") ?: property("upnut.discord_client_id"))
+    val discordClientSecret = requireNotNull(configJson?.getStringOrNull("discord_client_secret") ?: property("upnut.discord_client_secret"))
+    val discordRedirectUri = requireNotNull(configJson?.getStringOrNull("discord_redirect") ?: property("upnut.discord_redirect"))
 
     fun routing(routing: Routing) =
         with(routing) {

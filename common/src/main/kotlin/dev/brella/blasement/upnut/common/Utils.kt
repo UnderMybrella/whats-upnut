@@ -7,6 +7,9 @@ import kotlin.time.Duration
 import kotlin.time.ExperimentalTime
 import kotlin.time.measureTime
 
+inline fun property(key: String) =
+    System.getProperty(key) ?: System.getenv(key)
+
 @OptIn(ExperimentalTime::class)
 suspend fun <T> T.loopEvery(time: Duration, `while`: suspend T.() -> Boolean, block: suspend () -> Unit) {
     while (`while`()) {

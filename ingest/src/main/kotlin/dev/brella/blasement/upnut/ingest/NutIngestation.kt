@@ -56,16 +56,16 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
         fun main(args: Array<String>) {
             val ingestFile = args.firstOrNull { str -> str.startsWith("-ingest=") }
                                  ?.substringAfter('=')
-                             ?: System.getProperty("upnut.ingest")
+                             ?: property("upnut.ingest")
                              ?: "ingest.json"
             val r2dbcFile = args.firstOrNull { str -> str.startsWith("-r2dbc=") }
                                 ?.substringAfter('=')
-                            ?: System.getProperty("upnut.r2dbc")
+                            ?: property("upnut.r2dbc")
                             ?: "upnuts-r2dbc.json"
 
             val eventuallyR2dbcFile = args.firstOrNull { str -> str.startsWith("-eventually=") }
                                           ?.substringAfter('=')
-                                      ?: System.getProperty("upnut.eventually")
+                                      ?: property("upnut.eventually")
                                       ?: "eventually-r2dbc.json"
 
             val baseConfig: JsonObject = File(ingestFile).takeIf(File::exists)?.readText()?.let(Json::decodeFromString) ?: JsonObject(emptyMap())
