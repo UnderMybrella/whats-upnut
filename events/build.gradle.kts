@@ -11,7 +11,7 @@ plugins {
 }
 
 group = "dev.brella"
-version = "1.1.0"
+version = "1.1.1"
 
 repositories {
     mavenCentral()
@@ -93,7 +93,7 @@ tasks.withType<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar> {
 tasks.create<com.bmuschko.gradle.docker.tasks.image.Dockerfile>("createDockerfile") {
     group = "docker"
 
-    destFile.set(File(rootProject.buildDir, "docker/query/Dockerfile"))
+    destFile.set(File(rootProject.buildDir, "docker/stream/Dockerfile"))
     from("azul/zulu-openjdk-alpine:11-jre")
     label(
         mapOf(
@@ -102,11 +102,11 @@ tasks.create<com.bmuschko.gradle.docker.tasks.image.Dockerfile>("createDockerfil
     )
     copyFile(tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJar").get().archiveFileName.get(), "/app/upnuts-stream.jar")
 
-    copyFile("r2dbc.json", "/app/r2dbc.json")
+    copyFile("upnuts-r2dbc.json", "/app/upnuts-r2dbc.json")
     copyFile("logback.xml", "/app/logback.xml")
     copyFile("events.conf", "/app/events.conf")
     entryPoint("java")
-    defaultCommand("-Dlogback.configurationFile=/app/logback.xml", "-Dupnut.r2dbc=/app/r2dbc.json", "-jar", "/app/upnuts-stream.jar", "-config=/app/events.conf")
+    defaultCommand("-Dlogback.configurationFile=/app/logback.xml", "-Dupnut.r2dbc=/app/upnuts-r2dbc.json", "-jar", "/app/upnuts-stream.jar", "-config=/app/events.conf")
 
     exposePort(9796)
 }
@@ -118,7 +118,7 @@ tasks.create<Sync>("syncShadowJarArchive") {
     from(
         tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJar").get().archiveFile.get().asFile,
         File(rootProject.projectDir, "deployment/events.conf"),
-        File(rootProject.projectDir, "deployment/r2dbc.json"),
+        File(rootProject.projectDir, "deployment/upnuts-r2dbc.json"),
         File(rootProject.projectDir, "deployment/logback.xml")
     )
     into(
