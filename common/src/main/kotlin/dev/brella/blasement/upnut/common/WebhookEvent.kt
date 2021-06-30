@@ -25,7 +25,7 @@ sealed class WebhookEvent {
     }
 
     @Serializable
-    data class LibraryChapter(val bookName: String, val bookIndex: Int, val chapterUUID: @Serializable(UUIDSerialiser::class) UUID, val chapterName: String?, val chapterNameRedacted: String?, val chapterIndex: Int, val isRedacted: Boolean)
+    data class LibraryChapter(val bookName: String, val bookIndex: Int, val chapterUUID: @Serializable(UUIDSerialiser::class) UUID, val chapterName: String?, val chapterNameRedacted: String?, val chapterIndex: Int, val unredactedSince: Instant?)
 
     @Serializable
     @SerialName("PING")

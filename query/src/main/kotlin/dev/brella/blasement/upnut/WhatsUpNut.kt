@@ -34,6 +34,7 @@ import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.future.await
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.reactive.awaitFirstOrNull
+import kotlinx.datetime.Instant
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
@@ -56,8 +57,6 @@ import java.io.File
 import java.nio.ByteBuffer
 import java.security.KeyFactory
 import java.security.spec.X509EncodedKeySpec
-import java.time.Clock
-import java.time.Instant
 import java.util.*
 import java.util.concurrent.TimeUnit
 import kotlin.collections.LinkedHashMap
@@ -174,7 +173,7 @@ class WhatsUpNut {
     suspend fun PipelineContext<Unit, ApplicationCall>.processGlobal(
         cache: KotlinCache<String, List<UpNutEvent>>,
         baseFunc: suspend (
-            time: Long, limit: Int, start: Int,
+            time: Long?, limit: Int, start: Int,
             noneOfProviders: List<UUID>?,
             noneOfSources: List<UUID>?,
             oneOfProviders: List<UUID>?,
@@ -191,7 +190,7 @@ class WhatsUpNut {
                 time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
             } ?: call.request.header("X-UpNut-Time")?.let { time ->
                 time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
-            } ?: Instant.now(Clock.systemUTC()).toEpochMilli()
+            }
 
             val oneOfSources = (parameters["filter_sources"] ?: parameters["one_of_sources"]
                                 ?: call.request.header("X-UpNut-FilterSources") ?: call.request.header("X-UpNut-OneOfSources"))
@@ -252,7 +251,7 @@ class WhatsUpNut {
     suspend fun PipelineContext<Unit, ApplicationCall>.processFiltered(
         cache: KotlinCache<String, List<UpNutEvent>>,
         baseFunc: suspend (
-            id: UUID, time: Long, limit: Int, offset: Int,
+            id: UUID, time: Long?, limit: Int, offset: Int,
             noneOfProviders: List<UUID>?,
             noneOfSources: List<UUID>?,
             oneOfProviders: List<UUID>?,
@@ -269,7 +268,7 @@ class WhatsUpNut {
                 time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
             } ?: call.request.header("X-UpNut-Time")?.let { time ->
                 time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
-            } ?: Instant.now(Clock.systemUTC()).toEpochMilli()
+            }
 
             val oneOfSources = (parameters["filter_sources"] ?: parameters["one_of_sources"]
                                 ?: call.request.header("X-UpNut-FilterSources") ?: call.request.header("X-UpNut-OneOfSources"))
@@ -335,12 +334,12 @@ class WhatsUpNut {
     data class LibraryBook(val bookTitle: String?, val chapters: List<LibraryChapter>)
 
     @Serializable
-    data class LibraryChapter(val feedID: String, val chapterTitle: String, val chapterTitleRedacted: String?, val indexInBook: Int, val isRedacted: Boolean)
+    data class LibraryChapter(val feedID: String, val chapterTitle: String, val chapterTitleRedacted: String?, val indexInBook: Int, val unredactedSince: Instant?)
 
     fun routing(routing: Routing) =
         with(routing) {
             get("/library") {
-                val books = upnut.client.sql("SELECT id, chapter_title_redacted, chapter_title, book_title, book_index, index_in_book, redacted FROM library WHERE exists = TRUE ORDER BY book_index, index_in_book").map { row ->
+                val books = upnut.client.sql("SELECT id, chapter_title_redacted, chapter_title, book_title, book_index, index_in_book, unredacted_since FROM library WHERE exists = TRUE ORDER BY book_index, index_in_book").map { row ->
                     (row["id"] as? UUID)?.let { uuid ->
                         Pair(
                             row["book_title"] as? String,
@@ -349,7 +348,7 @@ class WhatsUpNut {
                                 row["chapter_title"] as? String ?: row["chapter_title"].toString(),
                                 row["chapter_title_redacted"] as? String,
                                 row.getValue("index_in_book"),
-                                row["redacted"] as? Boolean ?: true
+                                (row["unredacted_since"] as? Long)?.let(Instant::fromEpochMilliseconds)
                             )
                         )
                     }
@@ -364,7 +363,7 @@ class WhatsUpNut {
 
                 call.respond(books)
             }
-            get("/library/chapter_for_events") {
+            /*get("/library/chapter_for_events") {
                 val eventIDs = call.request.queryParameters.run {
                     (get("id") ?: get("ids"))?.split(',')
                 } ?: emptyList()
@@ -395,7 +394,7 @@ class WhatsUpNut {
                     call.respondRedirect("https://www.blaseball.com/library/${pair.first}/${pair.second + 1}", false)
                 }
             }
-
+*/
             route("/gc") {
                 get("/pending") {
                     call.respond(
@@ -479,7 +478,7 @@ class WhatsUpNut {
 
                     val time = queryParams["time"]?.let { time ->
                         BLASEBALL_TIME_PATTERN.tryParse(time, false)?.utc?.unixMillisLong ?: time.toLongOrNull()
-                    } ?: Instant.now(Clock.systemUTC()).toEpochMilli()
+                    }
 
                     val nuts = upnut.client.sql("SELECT nuts FROM upnuts WHERE feed_id = $1 AND provider = $2 AND source IS NOT DISTINCT FROM $3")
                                    .bind("$1", feedID)
@@ -565,7 +564,7 @@ class WhatsUpNut {
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
                     } ?: call.request.header("X-UpNut-Time")?.let { time ->
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
-                    } ?: Instant.now(Clock.systemUTC()).toEpochMilli()
+                    }
 
                     val oneOfSources = (parameters["filter_sources"] ?: parameters["one_of_sources"]
                                         ?: call.request.header("X-UpNut-FilterSources") ?: call.request.header("X-UpNut-OneOfSources"))
@@ -587,8 +586,22 @@ class WhatsUpNut {
                         ?.split(',')
                         ?.mapNotNull(String::uuidOrNull)
 
+                    //First, we do a quick check for what books are available
+                    val availableChapters = upnut.client.sql("SELECT id FROM library WHERE unredacted_since IS NOT NULL AND ($1 IS NULL OR unredacted_since < $1)")
+                                                .bindNullable("$1", time)
+                                                .map { row -> row.getValue<UUID>("id") }
+                                                .all()
+                                                .collectList()
+                                                .awaitFirstOrNull() ?: emptyList()
+
                     http.getAsResult<List<UpNutEvent>>("https://api.sibr.dev/eventually/v2/events") {
                         url.parameters.appendAll(parameters)
+
+                        if (availableChapters.isEmpty()) {
+                            parameter("metadata._eventually_chapter_id", "notexists")
+                        } else {
+                            parameter("metadata._eventually_chapter_id", availableChapters.joinToString("_or_", prefix = "notexists_or_"))
+                        }
                     }.map { list ->
                         val feedEventSources = list.map(UpNutEvent::id)
                         val map = upnut.eventually(feedEventSources, time, noneOfProviders, noneOfSources, oneOfProviders, oneOfSources) ?: emptyMap()
@@ -648,7 +661,7 @@ class WhatsUpNut {
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
                     } ?: call.request.header("X-UpNut-Time")?.let { time ->
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
-                    } ?: Instant.now(Clock.systemUTC()).toEpochMilli()
+                    }
 
                     val oneOfSources = (parameters["filter_sources"] ?: parameters["one_of_sources"]
                                         ?: call.request.header("X-UpNut-FilterSources") ?: call.request.header("X-UpNut-OneOfSources"))
@@ -673,8 +686,22 @@ class WhatsUpNut {
                     val formatAsDateTime = (parameters["time_format"] ?: call.request.header("X-UpNut-TimeFormat")) ==
                             "datetime"
 
+                    //First, we do a quick check for what books are available
+                    val availableChapters = upnut.client.sql("SELECT id FROM library WHERE unredacted_since IS NOT NULL AND unredacted_since < $1")
+                                                .bindNullable("$1", time)
+                                                .map { row -> row.getValue<UUID>("id") }
+                                                .all()
+                                                .collectList()
+                                                .awaitFirstOrNull() ?: emptyList()
+
                     http.getAsResult<List<UpNutEvent>>("https://api.sibr.dev/eventually/v2/events") {
                         url.parameters.appendAll(parameters)
+
+                        if (availableChapters.isEmpty()) {
+                            parameter("metadata._eventually_chapter_id", "notexists")
+                        } else {
+                            parameter("metadata._eventually_chapter_id", availableChapters.joinToString("_or_", prefix = "notexists_or_"))
+                        }
                     }.map { list ->
                         val map = upnut.eventuallyNutsList(list.map(UpNutEvent::id), time, noneOfProviders, noneOfSources, oneOfProviders, oneOfSources) ?: emptyMap()
 
@@ -752,7 +779,8 @@ class WhatsUpNut {
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
                     } ?: call.request.header("X-UpNut-Time")?.let { time ->
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
-                    } ?: Instant.now(Clock.systemUTC()).toEpochMilli()
+                    }
+
                     val start = parameters["start"]
                     val offset = parameters["offset"]?.toIntOrNull()
                     val sort = parameters["sort"]?.toIntOrNull()
@@ -760,7 +788,7 @@ class WhatsUpNut {
                     when (sort) {
                         /** Oldest */
                         1 -> call.redirectInternally("/events") {
-                            append("before", (time / 1000).toString())
+                            time?.let { append("before", (time / 1000).toString()) }
                             if (after != null) {
                                 append("after", (after / 1000).toString())
                             } else if (start != null) {
@@ -771,12 +799,13 @@ class WhatsUpNut {
                                         append("after", (it / 1000).toString())
                                     }
                             }
-                            append("time", time.toString())
+                            time?.let { append("time", it.toString()) }
+
                             append("sortorder", "asc")
                             if (offset != null) append("offset", offset.toString())
                             else start?.toIntOrNull()?.let { append("offset", it.toString()) }
 
-                            appendAll(parameters.filter { k, _ -> k.toLowerCase() !in REMOVE_PARAMETERS_GLOBAL_EVENTUALLY })
+                            appendAll(parameters.filter { k, _ -> k.lowercase(Locale.getDefault()) !in REMOVE_PARAMETERS_GLOBAL_EVENTUALLY })
                         }
                         /** Top */
                         2 -> call.redirectInternally("/feed/top/global") {
@@ -794,16 +823,15 @@ class WhatsUpNut {
                                     ?.utc
                                     ?.unixMillisLong
 
-                            append("before", ((timestampStart ?: time) / 1000).toString())
-
+                            append("before", ((timestampStart ?: time ?: System.currentTimeMillis()) / 1000).toString())
 
                             after?.let { append("after", (it / 1000).toString()) }
-                            append("time", time.toString())
+                            time?.let { append("time", it.toString()) }
                             append("sortorder", "desc")
                             if (offset != null) append("offset", offset.toString())
                             else start?.toIntOrNull()?.let { append("offset", it.toString()) }
 
-                            appendAll(parameters.filter { k, _ -> k.toLowerCase() !in REMOVE_PARAMETERS_GLOBAL_EVENTUALLY })
+                            appendAll(parameters.filter { k, _ -> k.lowercase(Locale.getDefault()) !in REMOVE_PARAMETERS_GLOBAL_EVENTUALLY })
                         }
                     }
                 }
@@ -823,19 +851,22 @@ class WhatsUpNut {
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
                     } ?: call.request.header("X-UpNut-Time")?.let { time ->
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
-                    } ?: Instant.now(Clock.systemUTC()).toEpochMilli()
+                    }
 
                     when (sort) {
                         /** Oldest */
                         1 -> call.redirectInternally("/events") {
-                            append("before", (time / 1000).toString())
+                            append("before", ((time ?: System.currentTimeMillis()) / 1000).toString())
                             after?.let { append("after", (it / 1000).toString()) }
-                            append("time", time.toString())
+                            time?.let { append("time", it.toString()) }
+
                             if (start != null) append("offset", start.toString())
+                            else if (offset != null) append("offset", offset.toString())
+
                             append("teamTags", id)
                             append("sortorder", "asc")
 
-                            appendAll(parameters.filter { k, _ -> k.toLowerCase() !in REMOVE_PARAMETERS_TEAM_EVENTUALLY })
+                            appendAll(parameters.filter { k, _ -> k.lowercase(Locale.getDefault()) !in REMOVE_PARAMETERS_TEAM_EVENTUALLY })
                         }
                         /** Top */
                         2 -> call.redirectInternally("/feed/top/team") {
@@ -848,14 +879,17 @@ class WhatsUpNut {
 
                         /** Newest */
                         else -> call.redirectInternally("/events") {
-                            append("before", (time / 1000).toString())
+                            append("before", ((time ?: System.currentTimeMillis()) / 1000).toString())
                             after?.let { append("after", (it / 1000).toString()) }
-                            append("time", time.toString())
+                            time?.let { append("time", it.toString()) }
+
                             if (start != null) append("offset", start.toString())
+                            else if (offset != null) append("offset", offset.toString())
+
                             append("teamTags", id)
                             append("sortorder", "desc")
 
-                            appendAll(parameters.filter { k, _ -> k.toLowerCase() !in REMOVE_PARAMETERS_TEAM_EVENTUALLY })
+                            appendAll(parameters.filter { k, _ -> k.lowercase(Locale.getDefault()) !in REMOVE_PARAMETERS_TEAM_EVENTUALLY })
                         }
                     }
                 }
@@ -875,18 +909,22 @@ class WhatsUpNut {
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
                     } ?: call.request.header("X-UpNut-Time")?.let { time ->
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
-                    } ?: Instant.now(Clock.systemUTC()).toEpochMilli()
+                    }
 
                     when (sort) {
                         /** Oldest */
                         1 -> call.redirectInternally("/events") {
-                            append("before", (time / 1000).toString())
+                            append("before", ((time ?: System.currentTimeMillis()) / 1000).toString())
                             after?.let { append("after", (it / 1000).toString()) }
+                            time?.let { append("time", it.toString()) }
+
                             if (start != null) append("offset", start.toString())
+                            else if (offset != null) append("offset", offset.toString())
+
                             append("playerTags", id)
                             append("sortorder", "asc")
 
-                            appendAll(parameters.filter { k, _ -> k.toLowerCase() !in REMOVE_PARAMETERS_PLAYER_EVENTUALLY })
+                            appendAll(parameters.filter { k, _ -> k.lowercase(Locale.getDefault()) !in REMOVE_PARAMETERS_PLAYER_EVENTUALLY })
                         }
                         /** Top */
                         2 -> call.redirectInternally("/feed/top/player") {
@@ -899,13 +937,17 @@ class WhatsUpNut {
 
                         /** Newest */
                         else -> call.redirectInternally("/events") {
-                            append("before", (time / 1000).toString())
+                            append("before", ((time ?: System.currentTimeMillis()) / 1000).toString())
                             after?.let { append("after", (it / 1000).toString()) }
+                            time?.let { append("time", it.toString()) }
+
                             if (start != null) append("offset", start.toString())
+                            else if (offset != null) append("offset", offset.toString())
+
                             append("playerTags", id)
                             append("sortorder", "desc")
 
-                            appendAll(parameters.filter { k, _ -> k.toLowerCase() !in REMOVE_PARAMETERS_PLAYER_EVENTUALLY })
+                            appendAll(parameters.filter { k, _ -> k.lowercase(Locale.getDefault()) !in REMOVE_PARAMETERS_PLAYER_EVENTUALLY })
                         }
                     }
                 }
@@ -927,20 +969,24 @@ class WhatsUpNut {
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
                     } ?: call.request.header("X-UpNut-Time")?.let { time ->
                         time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
-                    } ?: Instant.now(Clock.systemUTC()).toEpochMilli()
+                    }
 
                     val player = (parameters["player"] ?: call.request.header("X-UpNut-Player"))?.uuidOrNull()
 
                     when (sort) {
                         /** Oldest */
                         1 -> call.redirectInternally("/events") {
-                            append("before", (time / 1000).toString())
+                            append("before", ((time ?: System.currentTimeMillis()) / 1000).toString())
                             after?.let { append("after", (it / 1000).toString()) }
+                            time?.let { append("time", it.toString()) }
+
                             if (start != null) append("offset", start.toString())
+                            else if (offset != null) append("offset", start.toString())
+
                             append("gameTags", id)
                             append("sortorder", "asc")
 
-                            appendAll(parameters.filter { k, _ -> k.toLowerCase() !in REMOVE_PARAMETERS_GAME_EVENTUALLY })
+                            appendAll(parameters.filter { k, _ -> k.lowercase(Locale.getDefault()) !in REMOVE_PARAMETERS_GAME_EVENTUALLY })
                         }
                         /** Top */
                         2 -> call.redirectInternally("/feed/top/game") {
@@ -953,13 +999,17 @@ class WhatsUpNut {
 
                         /** Newest */
                         else -> call.redirectInternally("/events") {
-                            append("before", (time / 1000).toString())
+                            append("before", ((time ?: System.currentTimeMillis()) / 1000).toString())
                             after?.let { append("after", (it / 1000).toString()) }
+                            time?.let { append("time", it.toString()) }
+
                             if (start != null) append("offset", start.toString())
+                            else if (offset != null) append("offset", offset.toString())
+
                             append("gameTags", id)
                             append("sortorder", "desc")
 
-                            appendAll(parameters.filter { k, _ -> k.toLowerCase() !in REMOVE_PARAMETERS_GAME_EVENTUALLY })
+                            appendAll(parameters.filter { k, _ -> k.lowercase(Locale.getDefault()) !in REMOVE_PARAMETERS_GAME_EVENTUALLY })
                         }
                     }
                 }

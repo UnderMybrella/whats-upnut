@@ -239,7 +239,7 @@ public interface ShellSource {
 
             loopEvery(loopEvery, `while` = { isActive }) {
                 try {
-                    val storyList = databaseClient.sql("SELECT id FROM library WHERE redacted = FALSE")
+                    val storyList = databaseClient.sql("SELECT id FROM library WHERE unredacted_since IS NOT NULL")
                         .map { row -> row.getValue<UUID>("id").toString() }
                         .all()
                         .collectList()

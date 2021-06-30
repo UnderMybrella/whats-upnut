@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.reactive.awaitFirstOrNull
+import kotlinx.datetime.Instant
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -33,6 +34,7 @@ import kotlinx.serialization.json.longOrNull
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.r2dbc.core.await
+import org.springframework.r2dbc.core.bind as bindNullable
 import reactor.core.publisher.Mono
 import java.io.File
 import java.util.*
@@ -40,6 +42,7 @@ import kotlin.collections.ArrayList
 import kotlin.collections.HashMap
 import kotlin.collections.HashSet
 import kotlin.coroutines.CoroutineContext
+import kotlin.math.min
 import kotlin.time.ExperimentalTime
 import kotlin.time.measureTime
 import kotlin.time.milliseconds
@@ -83,7 +86,11 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
     val processNuts: suspend (time: Long, events: List<UpNutEvent>) -> Unit = NutBuilder().buildNutProcessing()
 
     inline fun <T> runAndPrint(block: () -> T): T? =
-        try { block() } catch (th: Throwable) { th.printStackTrace(); null }
+        try {
+            block()
+        } catch (th: Throwable) {
+            th.printStackTrace(); null
+        }
 
     val initJob = launch {
         runAndPrint {
@@ -112,9 +119,31 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
         }
 
         runAndPrint {
-            nuts.client.sql("CREATE TABLE IF NOT EXISTS library (id UUID NOT NULL PRIMARY KEY, chapter_title_redacted VARCHAR(128), book_title VARCHAR(128) NOT NULL, book_index INT NOT NULL DEFAULT 0, chapter_title VARCHAR(128) NOT NULL, index_in_book INT NOT NULL, redacted BOOLEAN NOT NULL DEFAULT TRUE, exists BOOLEAN NOT NULL DEFAULT TRUE);")
+            nuts.client.sql("CREATE TABLE IF NOT EXISTS library (id UUID NOT NULL PRIMARY KEY, chapter_title_redacted VARCHAR(128), book_title VARCHAR(128) NOT NULL, book_index INT NOT NULL DEFAULT 0, chapter_title VARCHAR(128) NOT NULL, index_in_book INT NOT NULL, unredacted_since BIGINT, exists BOOLEAN NOT NULL DEFAULT TRUE);")
                 .await()
         }
+
+        /*
+        alter table library drop column redacted;
+
+        alter table library
+        	add unredacted_since BIGINT;
+
+        	UPDATE library SET unredacted_since = 1620752400000 WHERE id = 'db89fdca-5f18-4ab2-8b1a-722274c24d0f';
+UPDATE library SET unredacted_since = 1623642600000 WHERE id = '424cf389-4be5-4def-bae7-7b04f58b885a';
+UPDATE library SET unredacted_since = 1623642600000 WHERE id = '41e0bf9a-1854-472c-b5be-ad485c05146e';
+UPDATE library SET unredacted_since = 1624545900000 WHERE id = 'aec8c997-fc2b-4355-a577-5368f9fd5e7d';
+UPDATE library SET unredacted_since = 1624210500000 WHERE id = 'cd3393dd-675b-41e6-8550-6375c40e905a';
+UPDATE library SET unredacted_since = 1623937800000 WHERE id = '47286fff-1dee-453c-ad61-98f08cb9ac8a';
+UPDATE library SET unredacted_since = 1624391100000 WHERE id = 'c6baacaf-3141-4efb-95b0-65251b31da1c';
+UPDATE library SET unredacted_since = 1624391100000 WHERE id = 'a64c00db-4730-4de3-bc1c-dba9e87a5966';
+UPDATE library SET unredacted_since = 1624819500000 WHERE id = '8e9fbd47-8b2b-44a0-9946-6468a38d1ad5';
+UPDATE library SET unredacted_since = 1624819500000 WHERE id = 'd5cbdc46-471c-49b7-be19-0a42d12f58d4';
+UPDATE library SET unredacted_since = 1624545900000 WHERE id = '44d31807-f1ae-4de1-a8cc-335df8f1a790';
+UPDATE library SET unredacted_since = 1624213200000 WHERE id = '3a3062e1-24b1-4cb4-a778-fbb9e5160adf';
+UPDATE library SET unredacted_since = 1624213200000 WHERE id = '9114a2e4-3bc1-40b6-ad8e-76e212b3e2ba';
+UPDATE library SET unredacted_since = 1620884700000 WHERE id = 'dcf7d279-1df0-47d0-a8c1-237a4ae98ebf';
+         */
 
         runAndPrint {
             nuts.client.sql("CREATE TABLE IF NOT EXISTS event_log (id BIGSERIAL PRIMARY KEY, type INT NOT NULL, data json NOT NULL, created BIGINT NOT NULL, processed BOOLEAN NOT NULL DEFAULT FALSE);")
@@ -131,13 +160,20 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
                 .await()
         }
 
-runAndPrint {
-    nuts.client.sql("CREATE TABLE IF NOT EXISTS detective_work (feed_id UUID NOT NULL, source_id UUID, source_type SMALLINT NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS idx_detective_work ON detective_work (feed_id, source_id, source_type);")
-        .await()
-}
+        runAndPrint {
+            nuts.client.sql("CREATE TABLE IF NOT EXISTS detective_work (feed_id UUID NOT NULL, source_id UUID, source_type SMALLINT NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS idx_detective_work ON detective_work (feed_id, source_id, source_type);")
+                .await()
+        }
 
-        nuts.client.sql("CREATE TABLE IF NOT EXISTS herring_pools (feed_id UUID PRIMARY KEY, first_discovered BIGINT NOT NULL)")
-            .await()
+        runAndPrint {
+            nuts.client.sql("CREATE TABLE IF NOT EXISTS herring_pools (feed_id UUID PRIMARY KEY, first_discovered BIGINT NOT NULL)")
+                .await()
+        }
+
+        runAndPrint {
+            nuts.client.sql("CREATE TABLE IF NOT EXISTS noteworthy (feed_id UUID PRIMARY KEY, first_noted BIGINT NOT NULL);")
+                .await()
+        }
 
 //        try {
 //            nuts.client.sql("ALTER TABLE library ADD COLUMN exists BOOLEAN NOT NULL DEFAULT false")
@@ -242,7 +278,7 @@ runAndPrint {
         config.getJsonArrayOrNull("sources")?.forEach { element ->
             if (element !is JsonObject) return@forEach
 
-            when (val sourceType = element.getString("type").toLowerCase()) {
+            when (val sourceType = element.getString("type").lowercase(Locale.getDefault())) {
                 "global" -> {
                     val name = element.getStringOrNull("name")
 
@@ -254,7 +290,7 @@ runAndPrint {
                     val delayOnFailure = getLongInScope(element, "delay_on_failure_ms", 100)
                     val totalLimit = getLongInScope(element, "total_limit", 100_000)
 
-                    val sortBy = when (val sortBy = element.getStringOrNull("sort_by")?.toLowerCase()) {
+                    val sortBy = when (val sortBy = element.getStringOrNull("sort_by")?.lowercase(Locale.getDefault())) {
                         "newest" -> 0
                         "oldest" -> 1
                         "top" -> 2
@@ -263,7 +299,7 @@ runAndPrint {
                         else -> sortBy.toIntOrNull() ?: 3
                     }
 
-                    val category = when (val category = element.getStringOrNull("category")?.toLowerCase()) {
+                    val category = when (val category = element.getStringOrNull("category")?.lowercase(Locale.getDefault())) {
                         "plays" -> 0
                         "changes" -> 1
                         "special" -> 2
@@ -290,7 +326,7 @@ runAndPrint {
                     val delayOnFailure = getLongInScope(element, "delay_on_failure_ms", 100)
                     val totalLimit = getLongInScope(element, "total_limit", Long.MAX_VALUE)
 
-                    val sortBy = when (val sortBy = element.getStringOrNull("sort_by")?.toLowerCase()) {
+                    val sortBy = when (val sortBy = element.getStringOrNull("sort_by")?.lowercase(Locale.getDefault())) {
                         "newest" -> 0
                         "oldest" -> 1
                         "top" -> 2
@@ -299,7 +335,7 @@ runAndPrint {
                         else -> sortBy.toIntOrNull() ?: 3
                     }
 
-                    val category = when (val category = element.getStringOrNull("category")?.toLowerCase()) {
+                    val category = when (val category = element.getStringOrNull("category")?.lowercase(Locale.getDefault())) {
                         "plays" -> 0
                         "changes" -> 1
                         "special" -> 2
@@ -334,7 +370,7 @@ runAndPrint {
                     val delayOnFailure = getLongInScope(element, "delay_on_failure_ms", 100)
                     val totalLimit = getLongInScope(element, "total_limit", Long.MAX_VALUE)
 
-                    val sortBy = when (val sortBy = element.getStringOrNull("sort_by")?.toLowerCase()) {
+                    val sortBy = when (val sortBy = element.getStringOrNull("sort_by")?.lowercase(Locale.getDefault())) {
                         "newest" -> 0
                         "oldest" -> 1
                         "top" -> 2
@@ -343,7 +379,7 @@ runAndPrint {
                         else -> sortBy.toIntOrNull() ?: 3
                     }
 
-                    val category = when (val category = element.getStringOrNull("category")?.toLowerCase()) {
+                    val category = when (val category = element.getStringOrNull("category")?.lowercase(Locale.getDefault())) {
                         "plays" -> 0
                         "changes" -> 1
                         "special" -> 2
@@ -371,7 +407,7 @@ runAndPrint {
                     val delayOnFailure = getLongInScope(element, "delay_on_failure_ms", 100)
                     val totalLimit = getLongInScope(element, "total_limit", Long.MAX_VALUE)
 
-                    val sortBy = when (val sortBy = element.getStringOrNull("sort_by")?.toLowerCase()) {
+                    val sortBy = when (val sortBy = element.getStringOrNull("sort_by")?.lowercase(Locale.getDefault())) {
                         "newest" -> 0
                         "oldest" -> 1
                         "top" -> 2
@@ -380,7 +416,7 @@ runAndPrint {
                         else -> sortBy.toIntOrNull() ?: 3
                     }
 
-                    val category = when (val category = element.getStringOrNull("category")?.toLowerCase()) {
+                    val category = when (val category = element.getStringOrNull("category")?.lowercase(Locale.getDefault())) {
                         "plays" -> 0
                         "changes" -> 1
                         "special" -> 2
@@ -407,7 +443,7 @@ runAndPrint {
                     val delayOnFailure = getLongInScope(element, "delay_on_failure_ms", 100)
                     val totalLimit = getLongInScope(element, "total_limit", Long.MAX_VALUE)
 
-                    val sortBy = when (val sortBy = element.getStringOrNull("sort_by")?.toLowerCase()) {
+                    val sortBy = when (val sortBy = element.getStringOrNull("sort_by")?.lowercase(Locale.getDefault())) {
                         "newest" -> 0
                         "oldest" -> 1
                         "top" -> 2
@@ -416,7 +452,7 @@ runAndPrint {
                         else -> sortBy.toIntOrNull() ?: 3
                     }
 
-                    val category = when (val category = element.getStringOrNull("category")?.toLowerCase()) {
+                    val category = when (val category = element.getStringOrNull("category")?.lowercase(Locale.getDefault())) {
                         "plays" -> 0
                         "changes" -> 1
                         "special" -> 2
@@ -444,7 +480,7 @@ runAndPrint {
                     val delayOnFailure = getLongInScope(element, "delay_on_failure_ms", 100)
                     val totalLimit = getLongInScope(element, "total_limit", Long.MAX_VALUE)
 
-                    val sortBy = when (val sortBy = element.getStringOrNull("sort_by")?.toLowerCase()) {
+                    val sortBy = when (val sortBy = element.getStringOrNull("sort_by")?.lowercase(Locale.getDefault())) {
                         "newest" -> 0
                         "oldest" -> 1
                         "top" -> 2
@@ -453,7 +489,7 @@ runAndPrint {
                         else -> sortBy.toIntOrNull() ?: 3
                     }
 
-                    val category = when (val category = element.getStringOrNull("category")?.toLowerCase()) {
+                    val category = when (val category = element.getStringOrNull("category")?.lowercase(Locale.getDefault())) {
                         "plays" -> 0
                         "changes" -> 1
                         "special" -> 2
@@ -480,7 +516,7 @@ runAndPrint {
                     val delayOnFailure = getLongInScope(element, "delay_on_failure_ms", 100)
                     val totalLimit = getLongInScope(element, "total_limit", Long.MAX_VALUE)
 
-                    val sortBy = when (val sortBy = element.getStringOrNull("sort_by")?.toLowerCase()) {
+                    val sortBy = when (val sortBy = element.getStringOrNull("sort_by")?.lowercase(Locale.getDefault())) {
                         "newest" -> 0
                         "oldest" -> 1
                         "top" -> 2
@@ -489,7 +525,7 @@ runAndPrint {
                         else -> sortBy.toIntOrNull() ?: 3
                     }
 
-                    val category = when (val category = element.getStringOrNull("category")?.toLowerCase()) {
+                    val category = when (val category = element.getStringOrNull("category")?.lowercase(Locale.getDefault())) {
                         "plays" -> 0
                         "changes" -> 1
                         "special" -> 2
@@ -516,7 +552,7 @@ runAndPrint {
                     val delayOnFailure = getLongInScope(element, "delay_on_failure_ms", 100)
                     val totalLimit = getLongInScope(element, "total_limit", Long.MAX_VALUE)
 
-                    val sortBy = when (val sortBy = element.getStringOrNull("sort_by")?.toLowerCase()) {
+                    val sortBy = when (val sortBy = element.getStringOrNull("sort_by")?.lowercase(Locale.getDefault())) {
                         "newest" -> 0
                         "oldest" -> 1
                         "top" -> 2
@@ -525,7 +561,7 @@ runAndPrint {
                         else -> sortBy.toIntOrNull() ?: 3
                     }
 
-                    val category = when (val category = element.getStringOrNull("category")?.toLowerCase()) {
+                    val category = when (val category = element.getStringOrNull("category")?.lowercase(Locale.getDefault())) {
                         "plays" -> 0
                         "changes" -> 1
                         "special" -> 2
@@ -550,7 +586,7 @@ runAndPrint {
                     val delayOnFailure = getLongInScope(element, "delay_on_failure_ms", 100)
                     val totalLimit = getLongInScope(element, "total_limit", Long.MAX_VALUE)
 
-                    val sortBy = when (val sortBy = element.getStringOrNull("sort_by")?.toLowerCase()) {
+                    val sortBy = when (val sortBy = element.getStringOrNull("sort_by")?.lowercase(Locale.getDefault())) {
                         "newest" -> 0
                         "oldest" -> 1
                         "top" -> 2
@@ -559,7 +595,7 @@ runAndPrint {
                         else -> sortBy.toIntOrNull() ?: 3
                     }
 
-                    val category = when (val category = element.getStringOrNull("category")?.toLowerCase()) {
+                    val category = when (val category = element.getStringOrNull("category")?.lowercase(Locale.getDefault())) {
                         "plays" -> 0
                         "changes" -> 1
                         "special" -> 2
@@ -793,7 +829,7 @@ runAndPrint {
                     val books = Json.decodeFromString<List<LibraryBook>>(response.receive<String>())
 
                     val booksReturned =
-                        nuts.client.sql("SELECT id, book_title, book_index, chapter_title, chapter_title_redacted, index_in_book, redacted FROM library WHERE exists = TRUE")
+                        nuts.client.sql("SELECT id, book_title, book_index, chapter_title, chapter_title_redacted, index_in_book, unredacted_since FROM library WHERE exists = TRUE")
                             .map { row ->
                                 Pair(
                                     row.getValue<UUID>("id"),
@@ -804,7 +840,7 @@ runAndPrint {
                                         chapterName = row.get<String>("chapter_title"),
                                         chapterNameRedacted = row.get<String>("chapter_title_redacted"),
                                         chapterIndex = row.getValue<Int>("index_in_book"),
-                                        isRedacted = row.getValue<Boolean>("redacted")
+                                        unredactedSince = row.get<Long>("unredacted_since")?.let(Instant::fromEpochMilliseconds)
                                     )
                                 )
                             }.all()
@@ -822,32 +858,39 @@ runAndPrint {
                     books.forEachIndexed { bookIndex, (bookName, chapters) ->
                         chapters.forEachIndexed { chapterIndex, chapter ->
                             val existing = booksReturned[chapter.id]
+                            val now = if (!chapter.redacted) now() else null
 
-                            nuts.client.sql("INSERT INTO library (id, book_title, book_index, chapter_title, redacted, index_in_book, exists) VALUES ($1, $2, $3, $4, $5, $6, TRUE) ON CONFLICT (id) DO UPDATE SET book_title = $2, book_index = $3, chapter_title = $4, redacted = $5, index_in_book = $6, exists = TRUE")
+                            nuts.client.sql("INSERT INTO library (id, book_title, book_index, chapter_title, unredacted_since, index_in_book, exists) VALUES ($1, $2, $3, $4, $5, $6, TRUE) ON CONFLICT (id) DO UPDATE SET book_title = $2, book_index = $3, chapter_title = $4, unredacted_since = int8smaller(coalesce(library.unredacted_since, $5), $5), index_in_book = $6, exists = TRUE")
                                 .bind("$1", chapter.id)
                                 .bind("$2", bookName)
                                 .bind("$3", bookIndex)
                                 .bind("$4", chapter.title)
-                                .bind("$5", chapter.redacted)
+                                .bindNullable("$5", now)
                                 .bind("$6", chapterIndex)
                                 .await()
+
+                            val newTime = minOf(
+                                existing?.unredactedSince?.toEpochMilliseconds() ?: now ?: -1,
+                                now ?: -1
+                            ).takeIf { it >= 0 }
+                                ?.let(Instant::fromEpochMilliseconds)
 
                             if (existing == null) {
                                 //New book just dropped
 
                                 logger.info("New book just dropped: {} / {}", bookName, chapter.title)
 
-                                val chapter = WebhookEvent.LibraryChapter(bookName, bookIndex, chapter.id, chapter.title, null, chapterIndex, chapter.redacted)
+                                val chapter = WebhookEvent.LibraryChapter(bookName, bookIndex, chapter.id, chapter.title, null, chapterIndex, newTime)
                                 chaptersAdded.add(chapter)
-                                if (chapter.isRedacted) chaptersLocked.add(chapter)
+                                if (chapter.unredactedSince == null) chaptersLocked.add(chapter)
                                 else chaptersUnlocked.add(chapter)
 
-                            } else if (chapter.redacted != existing.isRedacted) {
+                            } else if (chapter.redacted != (existing.unredactedSince == null)) {
                                 //Book is now unredacted! -- Right ?
-                                logger.info("Book has shifted redactivity: {} -> {}, {} -> {}", existing.chapterName, chapter.title, existing.isRedacted, chapter.redacted)
+                                logger.info("Book has shifted redactivity: {} -> {}, {} -> {}", existing.chapterName, chapter.title, existing.unredactedSince == null, chapter.redacted)
 
-                                val chapter = WebhookEvent.LibraryChapter(bookName, bookIndex, chapter.id, chapter.title, existing.chapterName, chapterIndex, chapter.redacted)
-                                if (chapter.isRedacted) chaptersLocked.add(chapter)
+                                val chapter = WebhookEvent.LibraryChapter(bookName, bookIndex, chapter.id, chapter.title, existing.chapterName, chapterIndex, newTime)
+                                if (chapter.unredactedSince == null) chaptersLocked.add(chapter)
                                 else chaptersUnlocked.add(chapter)
                             }
                         }

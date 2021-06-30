@@ -95,7 +95,7 @@ class Eventuallie(config: JsonObject) {
         nuts: Map<UUID, Pair<Int, Int>>,
         upnut: UpNutClient,
         logger: Logger,
-        time: Long,
+        time: Long?,
         limit: Int,
         offset: Int,
         season: Int?,

@@ -8,6 +8,7 @@ import dev.brella.d4j.coroutines.json.addAllFields
 import dev.brella.d4j.coroutines.json.addEmbed
 import dev.brella.d4j.coroutines.json.addField
 import dev.brella.d4j.coroutines.json.author
+import dev.brella.d4j.coroutines.json.buildAllowedMentionsData
 import dev.brella.d4j.coroutines.json.buildWebhookExecuteRequest
 import dev.brella.d4j.coroutines.json.footer
 import dev.brella.d4j.coroutines.json.thumbnail
@@ -49,6 +50,10 @@ inline fun WebhookEvent.LibraryChaptersRedacted.toDiscordEvent() =
 
 //            timestamp()
         }
+
+        allowedMentions(buildAllowedMentionsData {
+            parse(emptyList())
+        })
     }
 
 inline fun WebhookEvent.LibraryChaptersUnredacted.toDiscordEvent() =
@@ -61,6 +66,10 @@ inline fun WebhookEvent.LibraryChaptersUnredacted.toDiscordEvent() =
 
 //            timestamp()
         }
+
+        allowedMentions(buildAllowedMentionsData {
+            parse(emptyList())
+        })
     }
 
 inline fun WebhookEvent.NewLibraryChapters.toDiscordEvent() =
@@ -70,9 +79,12 @@ inline fun WebhookEvent.NewLibraryChapters.toDiscordEvent() =
             thumbnail { url(LIBRARY) }
 
             chapters.formatFieldsTo(this)
-
 //            timestamp()
         }
+
+        allowedMentions(buildAllowedMentionsData {
+            parse(emptyList())
+        })
     }
 
 inline fun List<WebhookEvent.LibraryChapter>.formatFields() =
@@ -182,6 +194,10 @@ suspend inline fun WebhookEvent.NewHerringPool.toDiscordEvent(teamCache: AsyncLo
                     }
                 }
         }
+
+        allowedMentions(buildAllowedMentionsData {
+            parse(emptyList())
+        })
     }
 
 suspend inline fun WebhookEvent.ThresholdPassedNuts.toDiscordEvent(teamCache: AsyncLoadingCache<String, JsonObject>, playerCache: AsyncLoadingCache<String, JsonObject>) =
@@ -230,6 +246,10 @@ suspend inline fun WebhookEvent.ThresholdPassedNuts.toDiscordEvent(teamCache: As
                     }
                 }
         }
+
+        allowedMentions(buildAllowedMentionsData {
+            parse(emptyList())
+        })
     }
 
 suspend inline fun WebhookEvent.ThresholdPassedScales.toDiscordEvent(teamCache: AsyncLoadingCache<String, JsonObject>, playerCache: AsyncLoadingCache<String, JsonObject>) =
@@ -277,6 +297,10 @@ suspend inline fun WebhookEvent.ThresholdPassedScales.toDiscordEvent(teamCache: 
                     }
                 }
         }
+
+        allowedMentions(buildAllowedMentionsData {
+            parse(emptyList())
+        })
     }
 
 inline fun WebhookEvent.HelloWorld.toDiscordEvent() =

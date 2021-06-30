@@ -28,7 +28,7 @@ class NutSqlBuilder(val statement: DatabaseClient.GenericExecuteSpec, val mappin
     inline fun <reified T : Any> _bind(variable: String, value: T?): NutSqlBuilder =
         NutSqlBuilder(statement.bind(mappings[variable] ?: variable, Parameter.fromOrEmpty(value, T::class.java)), mappings)
 
-    inline fun time(long: Long) = _bind(TIME_VAR, long)
+    inline fun time(long: Long?) = _bind(TIME_VAR, long)
     inline fun limit(limit: Int) = _bind(LIMIT_VAR, limit)
     inline fun offset(offset: Int) = _bind(OFFSET_VAR, offset)
     inline fun provider(uuid: UUID) = _bind(SINGLE_PROVIDER_VAR, uuid)
