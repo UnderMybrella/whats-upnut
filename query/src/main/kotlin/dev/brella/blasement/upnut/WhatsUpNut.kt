@@ -602,6 +602,8 @@ class WhatsUpNut {
                         } else {
                             parameter("metadata._eventually_chapter_id", availableChapters.joinToString("_or_", prefix = "notexists_or_"))
                         }
+
+                        println("Calling ${url.clone().buildString()}")
                     }.map { list ->
                         val feedEventSources = list.map(UpNutEvent::id)
                         val map = upnut.eventually(feedEventSources, time, noneOfProviders, noneOfSources, oneOfProviders, oneOfSources) ?: emptyMap()

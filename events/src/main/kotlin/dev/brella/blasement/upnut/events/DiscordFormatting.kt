@@ -13,6 +13,7 @@ import dev.brella.d4j.coroutines.json.buildWebhookExecuteRequest
 import dev.brella.d4j.coroutines.json.footer
 import dev.brella.d4j.coroutines.json.thumbnail
 import discord4j.discordjson.json.ImmutableEmbedData
+import io.ktor.client.call.*
 import kotlinx.coroutines.future.await
 import kotlinx.datetime.Instant
 import kotlinx.serialization.json.JsonObject
@@ -168,20 +169,26 @@ suspend inline fun WebhookEvent.NewHerringPool.toDiscordEvent(teamCache: AsyncLo
             event.teamTags?.forEach { uuid ->
                 tags.add(
                     "[${
-                        teamCache[uuid.toString()]
-                            .await()
-                            .getStringOrNull("fullName")
-                        ?: "% Team %"
+                        try {
+                            teamCache[uuid.toString()]
+                                .await()
+                                .getStringOrNull("fullName")
+                        } catch (th: Throwable) {
+                            null
+                        } ?: "% Team %"
                     }](https://blaseball.com/team/$uuid)"
                 )
             }
             event.playerTags?.forEach { uuid ->
                 tags.add(
                     "[${
-                        playerCache[uuid.toString()]
-                            .await()
-                            .getStringOrNull("name")
-                        ?: "% Player %"
+                        try {
+                            playerCache[uuid.toString()]
+                                .await()
+                                .getStringOrNull("name")
+                        } catch (th: Throwable) {
+                            null
+                        } ?: "% Player %"
                     }](https://blaseball.com/player/$uuid)"
                 )
             }
@@ -220,20 +227,26 @@ suspend inline fun WebhookEvent.ThresholdPassedNuts.toDiscordEvent(teamCache: As
             event.teamTags?.forEach { uuid ->
                 tags.add(
                     "[${
-                        teamCache[uuid.toString()]
-                            .await()
-                            .getStringOrNull("fullName")
-                        ?: "% Team %"
+                        try {
+                            teamCache[uuid.toString()]
+                                .await()
+                                .getStringOrNull("fullName")
+                        } catch (th: Throwable) {
+                            null
+                        } ?: "% Team %"
                     }](https://blaseball.com/team/$uuid)"
                 )
             }
             event.playerTags?.forEach { uuid ->
                 tags.add(
                     "[${
-                        playerCache[uuid.toString()]
-                            .await()
-                            .getStringOrNull("name")
-                        ?: "% Player %"
+                        try {
+                            playerCache[uuid.toString()]
+                                .await()
+                                .getStringOrNull("name")
+                        } catch (th: Throwable) {
+                            null
+                        } ?: "% Player %"
                     }](https://blaseball.com/player/$uuid)"
                 )
             }
@@ -271,20 +284,26 @@ suspend inline fun WebhookEvent.ThresholdPassedScales.toDiscordEvent(teamCache: 
             event.teamTags?.forEach { uuid ->
                 tags.add(
                     "[${
-                        teamCache[uuid.toString()]
-                            .await()
-                            .getStringOrNull("fullName")
-                        ?: "% Team %"
+                        try {
+                            teamCache[uuid.toString()]
+                                .await()
+                                .getStringOrNull("fullName")
+                        } catch (th: Throwable) {
+                            null
+                        } ?: "% Team %"
                     }](https://blaseball.com/team/$uuid)"
                 )
             }
             event.playerTags?.forEach { uuid ->
                 tags.add(
                     "[${
-                        playerCache[uuid.toString()]
-                            .await()
-                            .getStringOrNull("name")
-                        ?: "% Player %"
+                        try {
+                            playerCache[uuid.toString()]
+                                .await()
+                                .getStringOrNull("name")
+                        } catch (th: Throwable) {
+                            null
+                        } ?: "% Player %"
                     }](https://blaseball.com/player/$uuid)"
                 )
             }
@@ -302,6 +321,68 @@ suspend inline fun WebhookEvent.ThresholdPassedScales.toDiscordEvent(teamCache: 
             parse(emptyList())
         })
     }
+
+suspend inline fun WebhookEvent.NoteworthyEvents.toDiscordEvent(teamCache: AsyncLoadingCache<String, JsonObject>, playerCache: AsyncLoadingCache<String, JsonObject>) =
+    buildWebhookExecuteRequest {
+        addEmbed {
+//            title("RECORDS SET")
+            thumbnail { url(LOOTCRATES) }
+
+            val being = (event.metadata as? JsonObject)?.getIntOrNull("being")
+            description(event.description)
+
+            author {
+                name("\uD83D\uDC41️ Something of Note \uD83D\uDC41️")
+                    .iconUrl(being?.let(AUTHORS::getOrNull) ?: "")
+                    .url("https://api.sibr.dev/eventually/v2/events?id=${event.id}")
+            }
+
+            timestamp(event.created.toString())
+
+            val tags: MutableList<String> = ArrayList()
+
+            event.gameTags?.forEach { uuid -> tags.add("[Game](https://blaseball.com/game/$uuid)") }
+            event.teamTags?.forEach { uuid ->
+                tags.add(
+                    "[${
+                        try {
+                            teamCache[uuid.toString()]
+                                .await()
+                                .getStringOrNull("fullName")
+                        } catch (th: Throwable) {
+                            null
+                        }?: "% Team %"
+                    }](https://blaseball.com/team/$uuid)"
+                )
+            }
+            event.playerTags?.forEach { uuid ->
+                tags.add(
+                    "[${
+                        try {
+                            playerCache[uuid.toString()]
+                                .await()
+                                .getStringOrNull("name")
+                        } catch (th: Throwable) {
+                            null
+                        } ?: "% Player %"
+                    }](https://blaseball.com/player/$uuid)"
+                )
+            }
+
+            tags.chunked(10)
+                .forEachIndexed { index, list ->
+                    addField {
+                        name(if (index == 0) "Tags" else "\u200B")
+                        value(list.joinToString(", "))
+                    }
+                }
+        }
+
+        allowedMentions(buildAllowedMentionsData {
+            parse(emptyList())
+        })
+    }
+
 
 inline fun WebhookEvent.HelloWorld.toDiscordEvent() =
     buildWebhookExecuteRequest {

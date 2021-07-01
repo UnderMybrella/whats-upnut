@@ -129,7 +129,7 @@ class NutIngestation(val config: JsonObject, val nuts: UpNutClient, val eventual
         alter table library
         	add unredacted_since BIGINT;
 
-        	UPDATE library SET unredacted_since = 1620752400000 WHERE id = 'db89fdca-5f18-4ab2-8b1a-722274c24d0f';
+        	UPDATE library SET unredacted_since = 1620632400000 WHERE id = 'db89fdca-5f18-4ab2-8b1a-722274c24d0f';
 UPDATE library SET unredacted_since = 1623642600000 WHERE id = '424cf389-4be5-4def-bae7-7b04f58b885a';
 UPDATE library SET unredacted_since = 1623642600000 WHERE id = '41e0bf9a-1854-472c-b5be-ad485c05146e';
 UPDATE library SET unredacted_since = 1624545900000 WHERE id = 'aec8c997-fc2b-4355-a577-5368f9fd5e7d';
@@ -615,6 +615,21 @@ UPDATE library SET unredacted_since = 1620884700000 WHERE id = 'dcf7d279-1df0-47
         ingestLogger.info("Reading from the following sources: {}", this)
     }
 
+    @OptIn(ExperimentalStdlibApi::class)
+    val noteworthyFilters = buildList<EventFilter> {
+        config.getJsonArrayOrNull("filters")?.forEach { element ->
+            if (element !is JsonObject) return@forEach
+
+            when (val sourceType = element.getString("type").lowercase(Locale.getDefault())) {
+
+                "roamer" -> add(VaultOfTheRoamer)
+                "klong" -> add(KennedyLosersNewGuys(http))
+
+                else -> ingestLogger.error("No filter type by name of '{}'", sourceType)
+            }
+        }
+    }
+
     @OptIn(ExperimentalTime::class, kotlinx.coroutines.ObsoleteCoroutinesApi::class)
     val finallyActor: SendChannel<List<UpNutEvent>> = actor<List<UpNutEvent>> {
         val set: MutableSet<UpNutEvent> = HashSet()
@@ -723,17 +738,15 @@ UPDATE library SET unredacted_since = 1620884700000 WHERE id = 'dcf7d279-1df0-47
             println(
                 "Ingest complete in ${
                     measureTime {
+                        val uniqueEvents = events.flatMap(UpNutIngest::events)
+                            .distinctBy(UpNutEvent::id)
                         val eventMetadataJob = launch {
-                            events.flatMap(UpNutIngest::events)
-                                .distinctBy(UpNutEvent::id)
-                                .let { events ->
-                                    val timeTaken = measureTime {
-                                        processEvents(events)
-                                    }
+                            val timeTaken = measureTime {
+                                processEvents(uniqueEvents)
+                            }
 
-                                    sendToFinally(events)
-                                    ingestLogger.trace("Processed events in {}", timeTaken)
-                                }
+                            sendToFinally(uniqueEvents)
+                            ingestLogger.trace("Processed events in {}", timeTaken)
                         }
 
                         val plasmaAgencyJob = launch {
@@ -742,6 +755,14 @@ UPDATE library SET unredacted_since = 1620884700000 WHERE id = 'dcf7d279-1df0-47
                             }
 
                             ingestLogger.trace("Processed Plasma's Voicemails in {}", timeTaken)
+                        }
+
+                        val noteworthyJob = launch {
+                            val timeTaken = measureTime {
+                                processNoteworthyEvents(uniqueEvents)
+                            }
+
+                            ingestLogger.trace("Processed Noteworthy Events in {}", timeTaken)
                         }
 
                         val shellsAndScalesJob = launch {
@@ -782,6 +803,7 @@ UPDATE library SET unredacted_since = 1620884700000 WHERE id = 'dcf7d279-1df0-47
 
                         shellsAndScalesJob.join()
                         plasmaAgencyJob.join()
+                        noteworthyJob.join()
                         eventMetadataJob.join()
                     }
                 }")
@@ -1638,6 +1660,33 @@ UPDATE library SET unredacted_since = 1620884700000 WHERE id = 'dcf7d279-1df0-47
         }
 
         //Meeting Adjourned
+    }
+
+    @OptIn(ExperimentalStdlibApi::class)
+    suspend fun processNoteworthyEvents(incoming: List<UpNutEvent>) {
+        val now = now()
+        val noteworthy = buildList<UpNutEvent> {
+            noteworthyFilters.forEach { filter -> addAll(filter.interestingEventsIn(incoming)) }
+        }.distinctBy { event -> event.id }
+
+        //Now, filter out events we've already seen
+        val existing = nuts.client.sql("SELECT feed_id FROM noteworthy WHERE feed_id = ANY($1)")
+                           .bind("$1", Array(noteworthy.size) { noteworthy[it].id })
+                           .map { row -> row.getValue<UUID>("feed_id") }
+                           .all()
+                           .collectList()
+                           .awaitFirstOrNull() ?: emptyList()
+
+        noteworthy.forEach { event ->
+            if (event.id in existing) return@forEach
+
+            nuts.client.sql("INSERT INTO noteworthy (feed_id, first_noted) VALUES ($1, $2)")
+                .bind("$1", event.id)
+                .bind("$2", now)
+                .await()
+
+            postEvent(WebhookEvent.NoteworthyEvents(event, now), WebhookEvent.NOTEWORTHY_EVENT)
+        }
     }
 
     suspend fun join() {

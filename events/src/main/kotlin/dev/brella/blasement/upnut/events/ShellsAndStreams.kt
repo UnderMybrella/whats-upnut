@@ -234,6 +234,8 @@ class ShellsAndStreams : CoroutineScope {
                     is WebhookEvent.ThresholdPassedNuts -> payload.toDiscordEvent(teamDetailsCache, playerDetailsCache)
                     is WebhookEvent.ThresholdPassedScales -> payload.toDiscordEvent(teamDetailsCache, playerDetailsCache)
 
+                    is WebhookEvent.NoteworthyEvents -> payload.toDiscordEvent(teamDetailsCache, playerDetailsCache)
+
                     else -> return KorneaResult.success(EmptyContent)
                 }
 

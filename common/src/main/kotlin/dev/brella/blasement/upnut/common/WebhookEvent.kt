@@ -22,6 +22,7 @@ sealed class WebhookEvent {
         const val LIBRARY_CHAPTER_REMOVED = 1 shl 6
 
         const val NEW_HERRING_POOL = 1 shl 7
+        const val NOTEWORTHY_EVENT = 1 shl 8
     }
 
     @Serializable
@@ -66,4 +67,8 @@ sealed class WebhookEvent {
     @Serializable
     @SerialName("NEW_HERRING_POOL")
     data class NewHerringPool(val event: UpNutEvent, val firstDiscovered: Long): WebhookEvent()
+
+    @Serializable
+    @SerialName("NOTEWORTHY_EVENTS")
+    data class NoteworthyEvents(val event: UpNutEvent, val found: Long): WebhookEvent()
 }

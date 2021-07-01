@@ -61,5 +61,13 @@
       "type": "liquid_friend",
       "total_limit": 2000
     }
+  ],
+  "filters": [
+    {
+      "type": "Roamer"
+    },
+    {
+      "type": "KLoNG"
+    }
   ]
 }
