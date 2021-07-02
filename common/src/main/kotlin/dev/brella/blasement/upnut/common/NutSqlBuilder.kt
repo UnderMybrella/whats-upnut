@@ -16,6 +16,7 @@ import dev.brella.blasement.upnut.common.UpNutClient.Companion.PLAYER_VAR
 import dev.brella.blasement.upnut.common.UpNutClient.Companion.SEASON_VAR
 import dev.brella.blasement.upnut.common.UpNutClient.Companion.SINGLE_PROVIDER_VAR
 import dev.brella.blasement.upnut.common.UpNutClient.Companion.SINGLE_SOURCE_VAR
+import dev.brella.blasement.upnut.common.UpNutClient.Companion.STORY_VAR
 import dev.brella.blasement.upnut.common.UpNutClient.Companion.TEAM_VAR
 import dev.brella.blasement.upnut.common.UpNutClient.Companion.TIME_VAR
 import dev.brella.blasement.upnut.common.UpNutClient.Companion.TOURNAMENT_VAR
@@ -42,6 +43,7 @@ class NutSqlBuilder(val statement: DatabaseClient.GenericExecuteSpec, val mappin
     inline fun team(id: UUID) = _bind(TEAM_VAR, id)
     inline fun game(id: UUID) = _bind(GAME_VAR, id)
     inline fun player(id: UUID) = _bind(PLAYER_VAR, id)
+    inline fun story(id: UUID) = _bind(STORY_VAR, id)
 
     inline fun feedIDs(ids: Iterable<UUID>) = _bind(FEEDS_VAR, ids.toList().toTypedArray())
 

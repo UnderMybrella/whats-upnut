@@ -1,13 +1,11 @@
 package dev.brella.blasement.upnut.common
 
-import io.netty.channel.epoll.Epoll
 import io.r2dbc.spi.ConnectionFactories
 import io.r2dbc.spi.ConnectionFactory
 import io.r2dbc.spi.ConnectionFactoryOptions
 import io.r2dbc.spi.Option
 import kotlinx.coroutines.reactive.awaitFirst
 import kotlinx.coroutines.reactive.awaitFirstOrNull
-import kotlinx.coroutines.reactive.awaitSingleOrNull
 import kotlinx.coroutines.reactor.awaitSingleOrNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -33,6 +31,7 @@ class UpNutClient(config: JsonObject) {
         const val TEAM_VAR = ":team:"
         const val GAME_VAR = ":game:"
         const val PLAYER_VAR = ":player:"
+        const val STORY_VAR = ":story:"
 
         const val FEED_ID_VAR = ":feed_id:"
 
@@ -51,9 +50,13 @@ class UpNutClient(config: JsonObject) {
         const val TIME_FILTER = "($TIME_VAR IS NULL OR time <= $TIME_VAR)"
         const val LIBRARY_TIME_FILTER =
             "($TIME_VAR IS NULL OR (NOT EXISTS(SELECT 1 FROM feed_sources WHERE feed_sources.feed_id = upnuts.feed_id AND feed_sources.source_type = 4) OR EXISTS(SELECT 1 FROM library WHERE id = (SELECT source_id FROM feed_sources WHERE feed_sources.feed_id = upnuts.feed_id AND source_type = 4 LIMIT 1) AND unredacted_since IS NOT NULL AND unredacted_since < $TIME_VAR)))"
+
         const val TEAM_FILTER = "feed_id IN (SELECT feed_id FROM team_nuts WHERE team_id = $TEAM_VAR)"
         const val GAME_FILTER = "feed_id IN (SELECT feed_id FROM game_nuts WHERE game_id = $GAME_VAR)"
         const val PLAYER_FILTER = "feed_id IN (SELECT feed_id FROM player_nuts WHERE player_id = $PLAYER_VAR)"
+        const val STORY_FILTER =
+            "EXISTS(SELECT 1 FROM feed_sources WHERE feed_sources.feed_id = upnuts.feed_id AND source_type = 4 AND source_id = $STORY_VAR LIMIT 1)"
+
         const val SINGLE_SOURCE_FILTER = "source IS NOT DISTINCT FROM $SINGLE_SOURCE_VAR"
         const val SINGLE_PROVIDER_FILTER = "provider = $SINGLE_PROVIDER_VAR"
 
@@ -111,6 +114,16 @@ class UpNutClient(config: JsonObject) {
         val PLAYER_TOP_SCALES = topScalesPSQLWithTimeAndPlayer(NONE_OF_PROVIDERS_FILTER, NONE_OF_SOURCES_FILTER, ONE_OF_PROVIDERS_FILTER, ONE_OF_SOURCES_FILTER, METADATA_FILTER)
         val PLAYER_EVENT_IDS = getEventIDs(CREATED_TIME_FILTER, PLAYER_FILTER, METADATA_NO_CREATED_FILTER)
 
+
+
+        val STORY_HOT = hotPSQLWithTimeAndStory(NONE_OF_PROVIDERS_FILTER, NONE_OF_SOURCES_FILTER, ONE_OF_PROVIDERS_FILTER, ONE_OF_SOURCES_FILTER, METADATA_FILTER)
+        val STORY_HOT_SCALES = hotScalesPSQLWithTimeAndStory(NONE_OF_PROVIDERS_FILTER, NONE_OF_SOURCES_FILTER, ONE_OF_PROVIDERS_FILTER, ONE_OF_SOURCES_FILTER, METADATA_FILTER)
+
+        val STORY_TOP = topPSQLWithTimeAndStory(NONE_OF_PROVIDERS_FILTER, NONE_OF_SOURCES_FILTER, ONE_OF_PROVIDERS_FILTER, ONE_OF_SOURCES_FILTER, METADATA_FILTER)
+        val STORY_TOP_SCALES = topScalesPSQLWithTimeAndStory(NONE_OF_PROVIDERS_FILTER, NONE_OF_SOURCES_FILTER, ONE_OF_PROVIDERS_FILTER, ONE_OF_SOURCES_FILTER, METADATA_FILTER)
+        val STORY_EVENT_IDS = getEventIDs(CREATED_TIME_FILTER, STORY_FILTER, METADATA_NO_CREATED_FILTER)
+
+
         val EVENTUALLY_EVENTS =
             NutSqlStatement("SELECT feed_id, SUM(nuts) as nuts, SUM(scales) as scales FROM upnuts WHERE $IN_FEED_ID_FILTER AND $TIME_FILTER AND $NONE_OF_PROVIDERS_FILTER AND $NONE_OF_SOURCES_FILTER AND $ONE_OF_PROVIDERS_FILTER AND $ONE_OF_SOURCES_FILTER GROUP BY feed_id")
 
@@ -153,6 +166,9 @@ class UpNutClient(config: JsonObject) {
         inline fun hotPSQLWithTimeAndPlayer(vararg and: String) =
             hotPSQL(TIME_FILTER, PLAYER_FILTER, *and, LIBRARY_TIME_FILTER)
 
+        inline fun hotPSQLWithTimeAndStory(vararg and: String) =
+            hotPSQL(TIME_FILTER, STORY_FILTER, *and, LIBRARY_TIME_FILTER)
+
         inline fun topPSQL(vararg where: String) =
             NutSqlStatement(
                 "SELECT feed_id, SUM(nuts) AS nuts, SUM(scales) as scales FROM upnuts ${
@@ -174,6 +190,10 @@ class UpNutClient(config: JsonObject) {
 
         inline fun topPSQLWithTimeAndPlayer(vararg and: String) =
             topPSQL(TIME_FILTER, PLAYER_FILTER, *and, LIBRARY_TIME_FILTER)
+
+        inline fun topPSQLWithTimeAndStory(vararg and: String) =
+            topPSQL(TIME_FILTER, STORY_FILTER, *and, LIBRARY_TIME_FILTER)
+
 
         /** Scales */
 
@@ -210,6 +230,9 @@ class UpNutClient(config: JsonObject) {
         inline fun hotScalesPSQLWithTimeAndPlayer(vararg and: String) =
             hotScalesPSQL(TIME_FILTER, PLAYER_FILTER, *and, LIBRARY_TIME_FILTER)
 
+        inline fun hotScalesPSQLWithTimeAndStory(vararg and: String) =
+            hotScalesPSQL(TIME_FILTER, STORY_FILTER, *and, LIBRARY_TIME_FILTER)
+
         inline fun topScalesPSQL(vararg where: String) =
             NutSqlStatement {
                 appendLine("SELECT feed_id, SUM(nuts) AS nuts, SUM(scales) as scales")
@@ -232,6 +255,9 @@ class UpNutClient(config: JsonObject) {
 
         inline fun topScalesPSQLWithTimeAndPlayer(vararg and: String) =
             topScalesPSQL(TIME_FILTER, PLAYER_FILTER, *and, LIBRARY_TIME_FILTER)
+
+        inline fun topScalesPSQLWithTimeAndStory(vararg and: String) =
+            topScalesPSQL(TIME_FILTER, STORY_FILTER, *and, LIBRARY_TIME_FILTER)
     }
 
     val connectionFactory: ConnectionFactory = ConnectionFactories.get(
@@ -799,6 +825,104 @@ class UpNutClient(config: JsonObject) {
         PLAYER_TOP_SCALES(client)
             .metadata()
             .player(playerID)
+            .time(time)
+            .limit(limit)
+            .offset(offset)
+            .noneOfProviders(noneOfProviders)
+            .noneOfSources(noneOfSources)
+            .oneOfProviders(oneOfProviders)
+            .oneOfSources(oneOfSources)
+            .addMetadata()
+            .fetch()
+            .all()
+            .collectList()
+            .awaitSingleOrNull()
+
+
+
+    suspend fun storyHot(
+        storyID: UUID, time: Long?, limit: Int, offset: Int,
+        noneOfProviders: List<UUID>? = null,
+        noneOfSources: List<UUID>? = null,
+        oneOfProviders: List<UUID>? = null,
+        oneOfSources: List<UUID>? = null,
+        addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }
+    ) =
+        STORY_HOT(client)
+            .metadata()
+            .story(storyID)
+            .time(time)
+            .limit(limit)
+            .offset(offset)
+            .noneOfProviders(noneOfProviders)
+            .noneOfSources(noneOfSources)
+            .oneOfProviders(oneOfProviders)
+            .oneOfSources(oneOfSources)
+            .addMetadata()
+            .fetch()
+            .all()
+            .collectList()
+            .awaitSingleOrNull()
+
+    suspend fun storyTop(
+        storyID: UUID, time: Long?, limit: Int, offset: Int,
+        noneOfProviders: List<UUID>? = null,
+        noneOfSources: List<UUID>? = null,
+        oneOfProviders: List<UUID>? = null,
+        oneOfSources: List<UUID>? = null,
+        addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }
+    ) =
+        STORY_TOP(client)
+            .metadata()
+            .story(storyID)
+            .time(time)
+            .limit(limit)
+            .offset(offset)
+            .noneOfProviders(noneOfProviders)
+            .noneOfSources(noneOfSources)
+            .oneOfProviders(oneOfProviders)
+            .oneOfSources(oneOfSources)
+            .addMetadata()
+            .fetch()
+            .all()
+            .collectList()
+            .awaitSingleOrNull()
+
+    suspend fun storyHotScales(
+        storyID: UUID, time: Long?, limit: Int, offset: Int,
+        noneOfProviders: List<UUID>? = null,
+        noneOfSources: List<UUID>? = null,
+        oneOfProviders: List<UUID>? = null,
+        oneOfSources: List<UUID>? = null,
+        addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }
+    ) =
+        STORY_HOT_SCALES(client)
+            .metadata()
+            .story(storyID)
+            .time(time)
+            .limit(limit)
+            .offset(offset)
+            .noneOfProviders(noneOfProviders)
+            .noneOfSources(noneOfSources)
+            .oneOfProviders(oneOfProviders)
+            .oneOfSources(oneOfSources)
+            .addMetadata()
+            .fetch()
+            .all()
+            .collectList()
+            .awaitSingleOrNull()
+
+    suspend fun storyTopScales(
+        storyID: UUID, time: Long?, limit: Int, offset: Int,
+        noneOfProviders: List<UUID>? = null,
+        noneOfSources: List<UUID>? = null,
+        oneOfProviders: List<UUID>? = null,
+        oneOfSources: List<UUID>? = null,
+        addMetadata: NutSqlBuilder.() -> DatabaseClient.GenericExecuteSpec = { this }
+    ) =
+        STORY_TOP_SCALES(client)
+            .metadata()
+            .story(storyID)
             .time(time)
             .limit(limit)
             .offset(offset)

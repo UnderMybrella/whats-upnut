@@ -16,6 +16,7 @@ import dev.brella.blasement.upnut.common.UpNutClient.Companion.PHASE_VAR
 import dev.brella.blasement.upnut.common.UpNutClient.Companion.PLAYER_VAR
 import dev.brella.blasement.upnut.common.UpNutClient.Companion.SEASON_VAR
 import dev.brella.blasement.upnut.common.UpNutClient.Companion.SINGLE_SOURCE_VAR
+import dev.brella.blasement.upnut.common.UpNutClient.Companion.STORY_VAR
 import dev.brella.blasement.upnut.common.UpNutClient.Companion.TEAM_VAR
 import dev.brella.blasement.upnut.common.UpNutClient.Companion.TIME_VAR
 import dev.brella.blasement.upnut.common.UpNutClient.Companion.TOURNAMENT_VAR
@@ -38,6 +39,7 @@ class NutSqlStatement(@Language("PostgreSQL") val psql: String, val mappings: Ma
             TEAM_VAR,
             GAME_VAR,
             PLAYER_VAR,
+            STORY_VAR,
             FEED_ID_VAR,
 
             FEEDS_VAR,
