@@ -371,38 +371,7 @@ class WhatsUpNut {
 
                 call.respond(books)
             }
-            /*get("/library/chapter_for_events") {
-                val eventIDs = call.request.queryParameters.run {
-                    (get("id") ?: get("ids"))?.split(',')
-                } ?: emptyList()
 
-                val stories = upnut.client.sql("SELECT feed_id, story_id FROM storytime WHERE feed_id = ANY($1)")
-                                  .bind("$1", Array(eventIDs.size) { UUID.fromString(eventIDs[it]) })
-                                  .map { row -> row.getValue<UUID>("feed_id").toString() to row.getValue<UUID>("story_id").toString() }
-                                  .all()
-                                  .collectList()
-                                  .awaitFirstOrNull()
-                                  ?.groupBy(Pair<String, String>::second, Pair<String, String>::first)
-                              ?: emptyMap()
-
-                call.respond(stories)
-            }
-            get("/library/chapter_for_event/{feed_id}/redirect") {
-                val uuid = call.parameters.getOrFail("feed_id")
-                val pair = upnut.client.sql("SELECT book_index, index_in_book FROM library WHERE id = (SELECT story_id FROM storytime WHERE feed_id = $1 LIMIT 1)")
-                    .bind("$1", UUID.fromString(uuid))
-                    .map { row -> Pair(row.getValue<Int>("book_index"), row.getValue<Int>("index_in_book")) }
-                    .awaitOneOrNull()
-
-                if (pair == null) {
-                    call.respondJsonObject(HttpStatusCode.BadRequest) {
-                        put("error", "$uuid does not have a story")
-                    }
-                } else {
-                    call.respondRedirect("https://www.blaseball.com/library/${pair.first}/${pair.second + 1}", false)
-                }
-            }
-*/
             route("/gc") {
                 get("/pending") {
                     call.respond(

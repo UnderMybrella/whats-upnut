@@ -8,20 +8,14 @@ import io.r2dbc.spi.ConnectionFactoryOptions
 import io.r2dbc.spi.Option
 import kotlinx.coroutines.reactive.awaitFirstOrNull
 import kotlinx.serialization.decodeFromString
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonNull
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.booleanOrNull
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.doubleOrNull
-import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.*
 import org.slf4j.Logger
 import org.springframework.r2dbc.core.DatabaseClient
 import org.springframework.r2dbc.core.await
+import org.springframework.r2dbc.core.awaitOneOrNull
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.ConcurrentHashMap
 
 class Eventuallie(config: JsonObject) {
     val connectionFactory: ConnectionFactory = ConnectionFactories.get(
@@ -119,6 +113,7 @@ class Eventuallie(config: JsonObject) {
 
         val feedIDs = (nuts.keys.toList() + remainingList).filterNotNull()
         val map = getFeedEvents(feedIDs)
+        val hrefs = upnut.sourcesForFeed(feedIDs)
 
         val upnuts =
             provider?.let { upnut.isUpnutted(feedIDs, time, it, source) } ?: emptyMap()
@@ -137,7 +132,7 @@ class Eventuallie(config: JsonObject) {
             }
             val upnutted = upnuts[event.id]
 
-            val metadata: JsonElement =
+            var metadata: JsonElement =
                 if (upnutted?.first == true || upnutted?.second == true) {
                     when (val metadata = event.metadata) {
                         is JsonObject -> JsonObject(metadata + Pair("upnut", JsonPrimitive(true)))
@@ -145,6 +140,20 @@ class Eventuallie(config: JsonObject) {
                         else -> event.metadata
                     }
                 } else event.metadata
+
+            hrefs[feedID]?.let { sources ->
+                if (sources.isEmpty()) return@let
+
+                metadata = when (val metadata = metadata) {
+                    is JsonObject -> JsonObject(metadata + Pair("_upnuts_hrefs", buildJsonArray {
+                        sources.sortedByDescending(BlaseballSource::sourceType).forEach { add(it.toHref(upnut)) }
+                    }))
+                    is JsonNull -> JsonObject(mapOf("_upnuts_hrefs" to buildJsonArray {
+                        sources.sortedByDescending(BlaseballSource::sourceType).forEach { add(it.toHref(upnut)) }
+                    }))
+                    else -> metadata
+                }
+            }
 
             val nutPair = nuts[feedID]
 
@@ -157,6 +166,28 @@ class Eventuallie(config: JsonObject) {
                     scales = JsonPrimitive(nutPair?.second ?: 0)
                 }
             }
+        }
+    }
+
+    private val library: MutableMap<UUID, Pair<Int, Int>> = ConcurrentHashMap()
+    private suspend inline fun BlaseballSource.toHref(upnuts: UpNutClient): String? {
+        return when (sourceType) {
+            BlaseballSource.GLOBAL_FEED -> "https://www.blaseball.com"
+            BlaseballSource.PLAYER_FEED -> "https://www.blaseball.com/player/$sourceID"
+            BlaseballSource.TEAM_FEED -> "https://www.blaseball.com/team/$sourceID"
+            BlaseballSource.STORY_CHAPTER -> {
+                if ((sourceID ?: return null) !in library) {
+                    library[sourceID] =
+                        upnuts.client.sql("SELECT index_in_book, book_index FROM library WHERE id = $1")
+                            .bind("$1", sourceID)
+                            .map { row -> Pair(row.getValue<Int>("book_index"), row.getValue<Int>("index_in_book") + 1) }
+                            .awaitOneOrNull() ?: return null
+                }
+
+                library[sourceID]?.let { "https://www.blaseball.com/library/${it.first}/${it.second}" }
+            }
+
+            else -> null
         }
     }
 }

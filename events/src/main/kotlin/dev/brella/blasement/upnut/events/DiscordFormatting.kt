@@ -3,6 +3,8 @@ package dev.brella.blasement.upnut.events
 import com.github.benmanes.caffeine.cache.AsyncLoadingCache
 import dev.brella.blasement.upnut.common.WebhookEvent
 import dev.brella.blasement.upnut.common.getIntOrNull
+import dev.brella.blasement.upnut.common.getJsonArray
+import dev.brella.blasement.upnut.common.getJsonArrayOrNull
 import dev.brella.blasement.upnut.common.getStringOrNull
 import dev.brella.d4j.coroutines.json.addAllFields
 import dev.brella.d4j.coroutines.json.addEmbed
@@ -16,14 +18,7 @@ import discord4j.discordjson.json.ImmutableEmbedData
 import io.ktor.client.call.*
 import kotlinx.coroutines.future.await
 import kotlinx.datetime.Instant
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.addJsonObject
-import kotlinx.serialization.json.buildJsonArray
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.put
-import kotlinx.serialization.json.putJsonArray
-import kotlinx.serialization.json.putJsonObject
+import kotlinx.serialization.json.*
 
 const val LIBRARY = "https://cdn.discordapp.com/attachments/818811060349566988/843769330512035851/library.png"
 const val HERRING = "https://cdn.discordapp.com/attachments/818811060349566988/858816135759921182/fish.png"
@@ -192,6 +187,12 @@ suspend inline fun WebhookEvent.NewHerringPool.toDiscordEvent(teamCache: AsyncLo
                     }](https://blaseball.com/player/$uuid)"
                 )
             }
+            (event.metadata as? JsonObject)
+                ?.getJsonArrayOrNull("_upnuts_hrefs")
+                ?.forEach {
+                    val href = (it as? JsonPrimitive)?.contentOrNull ?: return@forEach
+                    if ("library" in href) tags.add("[${(event.metadata as? JsonObject)?.getStringOrNull("_eventually_book_title") ?: "% Library Book %"}](${href})")
+                }
 
             tags.chunked(10)
                 .forEachIndexed { index, list ->
@@ -250,6 +251,12 @@ suspend inline fun WebhookEvent.ThresholdPassedNuts.toDiscordEvent(teamCache: As
                     }](https://blaseball.com/player/$uuid)"
                 )
             }
+            (event.metadata as? JsonObject)
+                ?.getJsonArrayOrNull("_upnuts_hrefs")
+                ?.forEach {
+                    val href = (it as? JsonPrimitive)?.contentOrNull ?: return@forEach
+                    if ("library" in href) tags.add("[${(event.metadata as? JsonObject)?.getStringOrNull("_eventually_book_title") ?: "% Library Book %"}](${href})")
+                }
 
             tags.chunked(10)
                 .forEachIndexed { index, list ->
@@ -308,6 +315,13 @@ suspend inline fun WebhookEvent.ThresholdPassedScales.toDiscordEvent(teamCache: 
                 )
             }
 
+            (event.metadata as? JsonObject)
+                ?.getJsonArrayOrNull("_upnuts_hrefs")
+                ?.forEach {
+                    val href = (it as? JsonPrimitive)?.contentOrNull ?: return@forEach
+                    if ("library" in href) tags.add("[${(event.metadata as? JsonObject)?.getStringOrNull("_eventually_book_title") ?: "% Library Book %"}](${href})")
+                }
+
             tags.chunked(10)
                 .forEachIndexed { index, list ->
                     addField {
@@ -351,7 +365,7 @@ suspend inline fun WebhookEvent.NoteworthyEvents.toDiscordEvent(teamCache: Async
                                 .getStringOrNull("fullName")
                         } catch (th: Throwable) {
                             null
-                        }?: "% Team %"
+                        } ?: "% Team %"
                     }](https://blaseball.com/team/$uuid)"
                 )
             }
@@ -368,6 +382,12 @@ suspend inline fun WebhookEvent.NoteworthyEvents.toDiscordEvent(teamCache: Async
                     }](https://blaseball.com/player/$uuid)"
                 )
             }
+            (event.metadata as? JsonObject)
+                ?.getJsonArrayOrNull("_upnuts_hrefs")
+                ?.forEach {
+                    val href = (it as? JsonPrimitive)?.contentOrNull ?: return@forEach
+                    if ("library" in href) tags.add("[${(event.metadata as? JsonObject)?.getStringOrNull("_eventually_book_title") ?: "% Library Book %"}](${href})")
+                }
 
             tags.chunked(10)
                 .forEachIndexed { index, list ->

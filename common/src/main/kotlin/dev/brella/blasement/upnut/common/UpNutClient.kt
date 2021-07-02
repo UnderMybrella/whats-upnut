@@ -115,7 +115,6 @@ class UpNutClient(config: JsonObject) {
         val PLAYER_EVENT_IDS = getEventIDs(CREATED_TIME_FILTER, PLAYER_FILTER, METADATA_NO_CREATED_FILTER)
 
 
-
         val STORY_HOT = hotPSQLWithTimeAndStory(NONE_OF_PROVIDERS_FILTER, NONE_OF_SOURCES_FILTER, ONE_OF_PROVIDERS_FILTER, ONE_OF_SOURCES_FILTER, METADATA_FILTER)
         val STORY_HOT_SCALES = hotScalesPSQLWithTimeAndStory(NONE_OF_PROVIDERS_FILTER, NONE_OF_SOURCES_FILTER, ONE_OF_PROVIDERS_FILTER, ONE_OF_SOURCES_FILTER, METADATA_FILTER)
 
@@ -839,7 +838,6 @@ class UpNutClient(config: JsonObject) {
             .awaitSingleOrNull()
 
 
-
     suspend fun storyHot(
         storyID: UUID, time: Long?, limit: Int, offset: Int,
         noneOfProviders: List<UUID>? = null,
@@ -935,4 +933,14 @@ class UpNutClient(config: JsonObject) {
             .all()
             .collectList()
             .awaitSingleOrNull()
+
+    suspend inline fun sourcesForFeed(feedIDs: List<UUID>): Map<UUID, List<BlaseballSource>> =
+        client.sql("SELECT feed_id, source_id, source_type FROM feed_sources WHERE feed_id = ANY($1)")
+            .bind("$1", feedIDs.toTypedArray())
+            .map { row -> row.getValue<UUID>("feed_id") to BlaseballSource(row.get<UUID?>("source_id"), row.getValue<Int>("source_type")) }
+            .all()
+            .collectList()
+            .awaitFirstOrNull()
+            ?.groupBy(Pair<UUID, BlaseballSource>::first, Pair<UUID, BlaseballSource>::second)
+        ?: emptyMap()
 }
