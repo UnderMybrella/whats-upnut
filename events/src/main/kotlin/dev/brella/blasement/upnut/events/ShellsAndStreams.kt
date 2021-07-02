@@ -204,68 +204,72 @@ class ShellsAndStreams : CoroutineScope {
     inline fun now() = java.time.Clock.systemUTC().instant().toEpochMilli()
 
     suspend inline fun postEventTo(hook: StreamHook, eventData: ByteArray): KorneaResult<EmptyContent> {
-        return when (hook.type) {
-            SHELLHOOK_TYPE_DATA -> {
-                val sig = Mac.getInstance("HmacSHA256")
-                    .apply { init(SecretKeySpec(hook.secretKey, "HmacSHA256")) }
-                    .doFinal(eventData)
-                    .let(::hex)
+        try {
+            return when (hook.type) {
+                SHELLHOOK_TYPE_DATA -> {
+                    val sig = Mac.getInstance("HmacSHA256")
+                        .apply { init(SecretKeySpec(hook.secretKey, "HmacSHA256")) }
+                        .doFinal(eventData)
+                        .let(::hex)
 
-                http.postAsResult<EmptyContent>(hook.url) {
-                    header("X-UpNut-Signature", sig)
+                    http.postAsResult<EmptyContent>(hook.url) {
+                        header("X-UpNut-Signature", sig)
 
-                    body = ByteArrayContent(eventData, contentType = ContentType.Application.Json)
-                }
-            }
-
-            SHELLHOOK_TYPE_DISCORD -> {
-                val payload = Json.decodeFromString<WebhookEvent>(eventData.decodeToString())
-
-                val discordEvent = when (payload) {
-                    is WebhookEvent.HelloWorld -> payload.toDiscordEvent()
-                    is WebhookEvent.GoodbyeWorld -> payload.toDiscordEvent()
-
-                    is WebhookEvent.LibraryChaptersRedacted -> payload.toDiscordEvent()
-                    is WebhookEvent.LibraryChaptersUnredacted -> payload.toDiscordEvent()
-                    is WebhookEvent.NewLibraryChapters -> payload.toDiscordEvent()
-
-                    is WebhookEvent.NewHerringPool -> payload.toDiscordEvent(teamDetailsCache, playerDetailsCache)
-
-                    is WebhookEvent.ThresholdPassedNuts -> payload.toDiscordEvent(teamDetailsCache, playerDetailsCache)
-                    is WebhookEvent.ThresholdPassedScales -> payload.toDiscordEvent(teamDetailsCache, playerDetailsCache)
-
-                    is WebhookEvent.NoteworthyEvents -> payload.toDiscordEvent(teamDetailsCache, playerDetailsCache)
-
-                    else -> return KorneaResult.success(EmptyContent)
+                        body = ByteArrayContent(eventData, contentType = ContentType.Application.Json)
+                    }
                 }
 
-                try {
-                    discord.webhookService.awaitExecuteWebhook(hook.url.getWebhookIdFromUrl(), hook.url.getWebhookTokenFromUrl(), true, WebhookMultipartRequest(discordEvent))
-                    return KorneaResult.success(EmptyContent)
-                } catch (th: Throwable) {
-                    if (th is ClientException) {
-                        when (th.status) {
-                            HttpResponseStatus.BAD_REQUEST -> {
-                                //This is a fun one, because it means we've formulated a bad message
-                                //Log an error, then return 'Success' to prevent an infinite loop
+                SHELLHOOK_TYPE_DISCORD -> {
+                    val payload = Json.decodeFromString<WebhookEvent>(eventData.decodeToString())
 
-                                return KorneaResult.success(EmptyContent)
-                            }
-                            HttpResponseStatus.NOT_FOUND -> {
-                                //Remove :)
+                    val discordEvent = when (payload) {
+                        is WebhookEvent.HelloWorld -> payload.toDiscordEvent()
+                        is WebhookEvent.GoodbyeWorld -> payload.toDiscordEvent()
 
-                                upnutClient.client.sql("DELETE FROM webhooks WHERE id = $1")
-                                    .bind("$1", hook.id)
-                                    .await()
-                            }
-                        }
+                        is WebhookEvent.LibraryChaptersRedacted -> payload.toDiscordEvent()
+                        is WebhookEvent.LibraryChaptersUnredacted -> payload.toDiscordEvent()
+                        is WebhookEvent.NewLibraryChapters -> payload.toDiscordEvent()
+
+                        is WebhookEvent.NewHerringPool -> payload.toDiscordEvent(teamDetailsCache, playerDetailsCache)
+
+                        is WebhookEvent.ThresholdPassedNuts -> payload.toDiscordEvent(teamDetailsCache, playerDetailsCache)
+                        is WebhookEvent.ThresholdPassedScales -> payload.toDiscordEvent(teamDetailsCache, playerDetailsCache)
+
+                        is WebhookEvent.NoteworthyEvents -> payload.toDiscordEvent(teamDetailsCache, playerDetailsCache)
+
+                        else -> return KorneaResult.success(EmptyContent)
                     }
 
-                    return KorneaResult.thrown(th)
-                }
-            }
+                    try {
+                        discord.webhookService.awaitExecuteWebhook(hook.url.getWebhookIdFromUrl(), hook.url.getWebhookTokenFromUrl(), true, WebhookMultipartRequest(discordEvent))
+                        return KorneaResult.success(EmptyContent)
+                    } catch (th: Throwable) {
+                        if (th is ClientException) {
+                            when (th.status) {
+                                HttpResponseStatus.BAD_REQUEST -> {
+                                    //This is a fun one, because it means we've formulated a bad message
+                                    //Log an error, then return 'Success' to prevent an infinite loop
 
-            else -> KorneaResult.success(EmptyContent)
+                                    return KorneaResult.success(EmptyContent)
+                                }
+                                HttpResponseStatus.NOT_FOUND -> {
+                                    //Remove :)
+
+                                    upnutClient.client.sql("DELETE FROM webhooks WHERE id = $1")
+                                        .bind("$1", hook.id)
+                                        .await()
+                                }
+                            }
+                        }
+
+                        return KorneaResult.thrown(th)
+                    }
+                }
+
+                else -> KorneaResult.success(EmptyContent)
+            }
+        } catch (th: Throwable) {
+            return KorneaResult.thrown(th)
         }
     }
 

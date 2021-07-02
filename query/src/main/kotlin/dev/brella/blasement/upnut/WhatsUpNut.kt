@@ -603,7 +603,7 @@ class WhatsUpNut {
                             parameter("metadata._eventually_chapter_id", availableChapters.joinToString("_or_", prefix = "notexists_or_"))
                         }
 
-                        println("Calling ${url.clone().buildString()}")
+//                        println("Calling ${url.clone().buildString()}")
                     }.map { list ->
                         val feedEventSources = list.map(UpNutEvent::id)
                         val map = upnut.eventually(feedEventSources, time, noneOfProviders, noneOfSources, oneOfProviders, oneOfSources) ?: emptyMap()
@@ -790,7 +790,7 @@ class WhatsUpNut {
                     when (sort) {
                         /** Oldest */
                         1 -> call.redirectInternally("/events") {
-                            time?.let { append("before", (time / 1000).toString()) }
+                            append("before", ((time ?: System.currentTimeMillis()) / 1000).toString())
                             if (after != null) {
                                 append("after", (after / 1000).toString())
                             } else if (start != null) {
@@ -829,7 +829,9 @@ class WhatsUpNut {
 
                             after?.let { append("after", (it / 1000).toString()) }
                             time?.let { append("time", it.toString()) }
+
                             append("sortorder", "desc")
+
                             if (offset != null) append("offset", offset.toString())
                             else start?.toIntOrNull()?.let { append("offset", it.toString()) }
 
@@ -859,7 +861,16 @@ class WhatsUpNut {
                         /** Oldest */
                         1 -> call.redirectInternally("/events") {
                             append("before", ((time ?: System.currentTimeMillis()) / 1000).toString())
-                            after?.let { append("after", (it / 1000).toString()) }
+                            if (after != null) {
+                                append("after", (after / 1000).toString())
+                            } else if (start != null) {
+                                BLASEBALL_TIME_PATTERN.tryParse(start)
+                                    ?.utc
+                                    ?.unixMillisLong
+                                    ?.let {
+                                        append("after", (it / 1000).toString())
+                                    }
+                            }
                             time?.let { append("time", it.toString()) }
 
                             if (start != null) append("offset", start.toString())
@@ -881,12 +892,18 @@ class WhatsUpNut {
 
                         /** Newest */
                         else -> call.redirectInternally("/events") {
-                            append("before", ((time ?: System.currentTimeMillis()) / 1000).toString())
+                            val timestampStart =
+                                start?.let(BLASEBALL_TIME_PATTERN::tryParse)
+                                    ?.utc
+                                    ?.unixMillisLong
+
+                            append("before", ((timestampStart ?: time ?: System.currentTimeMillis()) / 1000).toString())
+
                             after?.let { append("after", (it / 1000).toString()) }
                             time?.let { append("time", it.toString()) }
 
-                            if (start != null) append("offset", start.toString())
-                            else if (offset != null) append("offset", offset.toString())
+                            if (offset != null) append("offset", offset.toString())
+                            else start?.toIntOrNull()?.let { append("offset", it.toString()) }
 
                             append("teamTags", id)
                             append("sortorder", "desc")
@@ -917,7 +934,16 @@ class WhatsUpNut {
                         /** Oldest */
                         1 -> call.redirectInternally("/events") {
                             append("before", ((time ?: System.currentTimeMillis()) / 1000).toString())
-                            after?.let { append("after", (it / 1000).toString()) }
+                            if (after != null) {
+                                append("after", (after / 1000).toString())
+                            } else if (start != null) {
+                                BLASEBALL_TIME_PATTERN.tryParse(start)
+                                    ?.utc
+                                    ?.unixMillisLong
+                                    ?.let {
+                                        append("after", (it / 1000).toString())
+                                    }
+                            }
                             time?.let { append("time", it.toString()) }
 
                             if (start != null) append("offset", start.toString())
@@ -939,12 +965,18 @@ class WhatsUpNut {
 
                         /** Newest */
                         else -> call.redirectInternally("/events") {
-                            append("before", ((time ?: System.currentTimeMillis()) / 1000).toString())
+                            val timestampStart =
+                                start?.let(BLASEBALL_TIME_PATTERN::tryParse)
+                                    ?.utc
+                                    ?.unixMillisLong
+
+                            append("before", ((timestampStart ?: time ?: System.currentTimeMillis()) / 1000).toString())
+
                             after?.let { append("after", (it / 1000).toString()) }
                             time?.let { append("time", it.toString()) }
 
-                            if (start != null) append("offset", start.toString())
-                            else if (offset != null) append("offset", offset.toString())
+                            if (offset != null) append("offset", offset.toString())
+                            else start?.toIntOrNull()?.let { append("offset", it.toString()) }
 
                             append("playerTags", id)
                             append("sortorder", "desc")
@@ -979,7 +1011,16 @@ class WhatsUpNut {
                         /** Oldest */
                         1 -> call.redirectInternally("/events") {
                             append("before", ((time ?: System.currentTimeMillis()) / 1000).toString())
-                            after?.let { append("after", (it / 1000).toString()) }
+                            if (after != null) {
+                                append("after", (after / 1000).toString())
+                            } else if (start != null) {
+                                BLASEBALL_TIME_PATTERN.tryParse(start)
+                                    ?.utc
+                                    ?.unixMillisLong
+                                    ?.let {
+                                        append("after", (it / 1000).toString())
+                                    }
+                            }
                             time?.let { append("time", it.toString()) }
 
                             if (start != null) append("offset", start.toString())
@@ -1001,12 +1042,18 @@ class WhatsUpNut {
 
                         /** Newest */
                         else -> call.redirectInternally("/events") {
-                            append("before", ((time ?: System.currentTimeMillis()) / 1000).toString())
+                            val timestampStart =
+                                start?.let(BLASEBALL_TIME_PATTERN::tryParse)
+                                    ?.utc
+                                    ?.unixMillisLong
+
+                            append("before", ((timestampStart ?: time ?: System.currentTimeMillis()) / 1000).toString())
+
                             after?.let { append("after", (it / 1000).toString()) }
                             time?.let { append("time", it.toString()) }
 
-                            if (start != null) append("offset", start.toString())
-                            else if (offset != null) append("offset", offset.toString())
+                            if (offset != null) append("offset", offset.toString())
+                            else start?.toIntOrNull()?.let { append("offset", it.toString()) }
 
                             append("gameTags", id)
                             append("sortorder", "desc")
