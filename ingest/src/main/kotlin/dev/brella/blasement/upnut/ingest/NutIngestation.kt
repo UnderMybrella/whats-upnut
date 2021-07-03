@@ -557,8 +557,8 @@ UPDATE library SET unredacted_since = 1620884700000 WHERE id = 'dcf7d279-1df0-47
                         "oldest" -> 1
                         "top" -> 2
                         "hot" -> 3
-                        null -> 3
-                        else -> sortBy.toIntOrNull() ?: 3
+                        null -> null
+                        else -> sortBy.toIntOrNull()
                     }
 
                     val category = when (val category = element.getStringOrNull("category")?.lowercase(Locale.getDefault())) {
@@ -591,8 +591,8 @@ UPDATE library SET unredacted_since = 1620884700000 WHERE id = 'dcf7d279-1df0-47
                         "oldest" -> 1
                         "top" -> 2
                         "hot" -> 3
-                        null -> 3
-                        else -> sortBy.toIntOrNull() ?: 3
+                        null -> null
+                        else -> sortBy.toIntOrNull()
                     }
 
                     val category = when (val category = element.getStringOrNull("category")?.lowercase(Locale.getDefault())) {
