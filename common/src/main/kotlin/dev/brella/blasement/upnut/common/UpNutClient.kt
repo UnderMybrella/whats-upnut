@@ -943,4 +943,13 @@ class UpNutClient(config: JsonObject) {
             .awaitFirstOrNull()
             ?.groupBy(Pair<UUID, BlaseballSource>::first, Pair<UUID, BlaseballSource>::second)
         ?: emptyMap()
+
+    suspend inline fun sourcesForFeed(feedID: UUID): List<BlaseballSource> =
+        client.sql("SELECT source_id, source_type FROM feed_sources WHERE feed_id = $1")
+            .bind("$1", feedID)
+            .map { row -> BlaseballSource(row.get<UUID?>("source_id"), row.getValue<Int>("source_type")) }
+            .all()
+            .collectList()
+            .awaitFirstOrNull()
+        ?: emptyList()
 }

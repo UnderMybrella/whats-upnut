@@ -122,43 +122,39 @@ class Eventuallie(config: JsonObject) {
 //        remainingList.mapNotNullTo(list) { uuid -> map[uuid]?.copy(nuts = JsonPrimitive(0)) }
 
         return feedIDs.mapNotNull { feedID ->
-            val event = map[feedID] ?: run {
+            val nutPair = nuts[feedID]
+            val event = (map[feedID] ?: run {
                 logger.warn("Eventually is missing {}, marking for collection", feedID)
                 upnut.client.sql("INSERT INTO metadata_collection (feed_id) VALUES ($1) ON CONFLICT DO NOTHING")
                     .bind("$1", feedID)
                     .await()
 
                 return@mapNotNull null
-            }
+            }).copy(nuts = JsonPrimitive(nutPair?.first ?: 0))
+
             val upnutted = upnuts[event.id]
 
-            var metadata: JsonElement =
-                if (upnutted?.first == true || upnutted?.second == true) {
-                    when (val metadata = event.metadata) {
-                        is JsonObject -> JsonObject(metadata + Pair("upnut", JsonPrimitive(true)))
-                        is JsonNull -> JsonObject(mapOf("upnut" to JsonPrimitive(true)))
-                        else -> event.metadata
-                    }
-                } else event.metadata
+            event withMetadata {
+                if (upnutted?.first == true || upnutted?.second == true) put("upnut", true)
+            }
 
             hrefs[feedID]?.let { sources ->
                 if (sources.isEmpty()) return@let
 
-                metadata = when (val metadata = metadata) {
-                    is JsonObject -> JsonObject(metadata + Pair("_upnuts_hrefs", buildJsonArray {
-                        sources.sortedByDescending(BlaseballSource::sourceType).forEach { add(it.toHref(upnut)) }
-                    }))
-                    is JsonNull -> JsonObject(mapOf("_upnuts_hrefs" to buildJsonArray {
-                        sources.sortedByDescending(BlaseballSource::sourceType).forEach { add(it.toHref(upnut)) }
-                    }))
-                    else -> metadata
+                event withMetadata {
+                    sources.sortedByDescending(BlaseballSource::sourceType)
+                        .mapNotNull { toHref(it, upnut) }
+                        .let { list ->
+                            if (list.isEmpty()) return@let
+                            putJsonArray("_upnuts_hrefs") {
+                                list.forEach { add(it) }
+                            }
+                        }
                 }
             }
 
-            val nutPair = nuts[feedID]
-
-            event.copy(nuts = JsonPrimitive(nutPair?.first ?: 0), metadata = metadata).apply {
-                if (scales == kotlinx.serialization.json.JsonNull) {
+            event.apply {
+                if (scales == JsonNull) {
                     if (nutPair != null && nutPair.second > 0) {
                         scales = JsonPrimitive(nutPair.second)
                     }
@@ -169,25 +165,42 @@ class Eventuallie(config: JsonObject) {
         }
     }
 
-    private val library: MutableMap<UUID, Pair<Int, Int>> = ConcurrentHashMap()
-    private suspend inline fun BlaseballSource.toHref(upnuts: UpNutClient): String? {
-        return when (sourceType) {
+    suspend fun mergeHrefsForEvent(upnut: UpNutClient, event: UpNutEvent): UpNutEvent =
+        event withMetadata {
+            upnut.sourcesForFeed(event.id)
+                .takeIf { it.isNotEmpty() }
+                ?.sortedByDescending(BlaseballSource::sourceType)
+                ?.mapNotNull { toHref(it, upnut) }
+                ?.let { list ->
+                    if (list.isEmpty()) return@let
+                    putJsonArray("_upnuts_hrefs") {
+                        list.forEach { add(it) }
+                    }
+                }
+        }
+
+    @PublishedApi
+    internal val library: MutableMap<UUID, Pair<Int, Int>> = ConcurrentHashMap()
+
+    suspend inline fun toHref(source: BlaseballSource, upnuts: UpNutClient): String? {
+        return when (source.sourceType) {
             BlaseballSource.GLOBAL_FEED -> "https://www.blaseball.com"
-            BlaseballSource.PLAYER_FEED -> "https://www.blaseball.com/player/$sourceID"
-            BlaseballSource.TEAM_FEED -> "https://www.blaseball.com/team/$sourceID"
+            BlaseballSource.PLAYER_FEED -> "https://www.blaseball.com/player/${source.sourceID}"
+            BlaseballSource.TEAM_FEED -> "https://www.blaseball.com/team/${source.sourceID}"
             BlaseballSource.STORY_CHAPTER -> {
-                if ((sourceID ?: return null) !in library) {
-                    library[sourceID] =
+                if ((source.sourceID ?: return null) !in library) {
+                    library[source.sourceID] =
                         upnuts.client.sql("SELECT index_in_book, book_index FROM library WHERE id = $1")
-                            .bind("$1", sourceID)
+                            .bind("$1", source.sourceID)
                             .map { row -> Pair(row.getValue<Int>("book_index"), row.getValue<Int>("index_in_book") + 1) }
                             .awaitOneOrNull() ?: return null
                 }
 
-                library[sourceID]?.let { "https://www.blaseball.com/library/${it.first}/${it.second}" }
+                library[source.sourceID]?.let { "https://www.blaseball.com/library/${it.first}/${it.second}" }
             }
 
             else -> null
         }
     }
+
 }

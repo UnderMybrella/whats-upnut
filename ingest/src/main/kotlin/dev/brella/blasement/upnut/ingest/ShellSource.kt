@@ -18,6 +18,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.reactive.awaitFirstOrNull
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.put
 import org.slf4j.Logger
 import org.springframework.r2dbc.core.DatabaseClient
 import java.time.Clock
@@ -235,7 +236,7 @@ public interface ShellSource {
         val type: Int? = null
     ) : ShellSource {
         override suspend fun CoroutineScope.processNuts(mailbox: SendChannel<UpNutIngest>) {
-            val etags: MutableMap<Int, String> = HashMap()
+            val etags: MutableMap<String, String> = HashMap()
 
             loopEvery(loopEvery, `while` = { isActive }) {
                 try {
@@ -248,31 +249,27 @@ public interface ShellSource {
                     logger.debug("Retrieving nuts and scales for {}", storyList)
 
                     storyList.forEach { story ->
-                        var start = 0
-
                         val source = BlaseballSource.story(UUID.fromString(story))
 
-                        while (isActive && start < totalLimit) {
-                            val now = now()
+                        val now = now()
 
-                            val response = httpClient.getStoryFeedAsResponse(story, limit = limit, sort = sortBy, category = category, type = type, start = start)
-                            val existingTag = etags[start]
-                            val responseTag = response.headers["Etag"]
-                            if (existingTag != null && existingTag == responseTag) {
-                                start += limit
-                                logger.trace("Hit ETag; continuing at {}", start)
-                            } else {
-                                val list = response.receive<List<UpNutEvent>>()
+                        val response = httpClient.getStoryFeedAsResponse(story, category = category, type = type, limit = 2000)
+                        val existingTag = etags[story]
+                        val responseTag = response.headers["Etag"]
+                        if (existingTag != null && existingTag == responseTag) {
+                            logger.trace("Hit ETag for {}", story)
 
-                                mailbox.send(UpNutIngest(now, source, list))
+                            delay(delayBetweenLoops)
+                        } else {
+                            val list = response.receive<List<UpNutEvent>>()
+                                .mapIndexed { index, upNutEvent ->
+                                    upNutEvent withMetadata { put("_upnuts_index", index) }
+                                }
 
-                                if (list.size < limit) break
+                            mailbox.send(UpNutIngest(now, source, list))
+                            responseTag?.let { etags[story] = it }
 
-                                responseTag?.let { etags[start] = it }
-                                start += list.size
-
-                                delay(delayBetweenLoops)
-                            }
+                            delay(delayBetweenLoops)
                         }
                     }
                 } catch (th: Throwable) {

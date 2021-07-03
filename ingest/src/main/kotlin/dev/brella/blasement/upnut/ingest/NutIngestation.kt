@@ -1261,7 +1261,8 @@ UPDATE library SET unredacted_since = 1620884700000 WHERE id = 'dcf7d279-1df0-47
                     .bind("$4", time)
                     .await()
 
-                if ((recordingNuts == null || recordingNuts < NUTS_THRESHOLD) && eventNuts!! >= NUTS_THRESHOLD) postEvent(WebhookEvent.ThresholdPassedNuts(NUTS_THRESHOLD, time, event), WebhookEvent.THRESHOLD_PASSED_NUTS)
+                if ((recordingNuts == null || recordingNuts < NUTS_THRESHOLD) && eventNuts!! >= NUTS_THRESHOLD)
+                    postEvent(WebhookEvent.ThresholdPassedNuts(NUTS_THRESHOLD, time, event), WebhookEvent.THRESHOLD_PASSED_NUTS)
             }
 
             val eventScales = event.scales.intOrNull
@@ -1294,72 +1295,66 @@ UPDATE library SET unredacted_since = 1620884700000 WHERE id = 'dcf7d279-1df0-47
                     .awaitFirstOrNull()
                 ?: emptyMap()
 
-            println(
-                "Batch Insert: ${
-                    measureTime {
-                        nuts.client.inConnectionAwait { connection ->
-                            events.chunked(100).forEach { chunk ->
-                                val insertNuts = connection.createStatement("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                var nutCount = 0
+            nuts.client.inConnectionAwait { connection ->
+                events.chunked(100).forEach { chunk ->
+                    val insertNuts = connection.createStatement("INSERT INTO upnuts (nuts, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
+                    var nutCount = 0
 
-                                val insertScales = connection.createStatement("INSERT INTO upnuts (scales, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
-                                var scaleCount = 0
+                    val insertScales = connection.createStatement("INSERT INTO upnuts (scales, feed_id, provider, time) VALUES ( $1, $2, $3, $4 )")
+                    var scaleCount = 0
 
-                                chunk.forEach { event ->
-                                    val atTimeOfRecording = atTimeOfRecordingMap[event.id]
+                    chunk.forEach { event ->
+                        val atTimeOfRecording = atTimeOfRecordingMap[event.id]
 
-                                    val eventNuts = event.nuts.intOrNull
-                                    val recordingNuts = atTimeOfRecording?.first
+                        val eventNuts = event.nuts.intOrNull
+                        val recordingNuts = atTimeOfRecording?.first
 
-                                    val nutsDifference = event.nuts.intOrNull - recordingNuts
-                                    if (nutsDifference != null && nutsDifference > 0) {
-                                        nutCount++
-                                        insertNuts
-                                            .bind("$1", nutsDifference)
-                                            .bind("$2", event.id)
-                                            .bind("$3", THE_GAME_BAND)
-                                            .bind("$4", time)
-                                            .add()
+                        val nutsDifference = event.nuts.intOrNull - recordingNuts
+                        if (nutsDifference != null && nutsDifference > 0) {
+                            nutCount++
+                            insertNuts
+                                .bind("$1", nutsDifference)
+                                .bind("$2", event.id)
+                                .bind("$3", THE_GAME_BAND)
+                                .bind("$4", time)
+                                .add()
 
-                                        if ((recordingNuts == null || recordingNuts < NUTS_THRESHOLD) && eventNuts!! >= NUTS_THRESHOLD)
-                                            postEvent(
-                                                WebhookEvent.ThresholdPassedNuts(NUTS_THRESHOLD, time, event),
-                                                WebhookEvent.THRESHOLD_PASSED_NUTS
-                                            )
-                                    }
+                            if ((recordingNuts == null || recordingNuts < NUTS_THRESHOLD) && eventNuts!! >= NUTS_THRESHOLD)
+                                postEvent(
+                                    WebhookEvent.ThresholdPassedNuts(NUTS_THRESHOLD, time, eventuallie.mergeHrefsForEvent(nuts, event)),
+                                    WebhookEvent.THRESHOLD_PASSED_NUTS
+                                )
+                        }
 
-                                    val eventScales = event.scales.intOrNull
-                                    val recordingScales = atTimeOfRecording?.second
+                        val eventScales = event.scales.intOrNull
+                        val recordingScales = atTimeOfRecording?.second
 
-                                    val scalesDifference = event.scales.intOrNull - recordingScales
-                                    if (scalesDifference != null && scalesDifference > 0) {
-                                        scaleCount++
+                        val scalesDifference = event.scales.intOrNull - recordingScales
+                        if (scalesDifference != null && scalesDifference > 0) {
+                            scaleCount++
 
-                                        insertScales
-                                            .bind("$1", scalesDifference)
-                                            .bind("$2", event.id)
-                                            .bind("$3", THE_GAME_BAND)
-                                            .bind("$4", time)
-                                            .add()
+                            insertScales
+                                .bind("$1", scalesDifference)
+                                .bind("$2", event.id)
+                                .bind("$3", THE_GAME_BAND)
+                                .bind("$4", time)
+                                .add()
 
-                                        if ((recordingScales == null || recordingScales < SCALES_THRESHOLD) && eventScales!! >= SCALES_THRESHOLD)
-                                            postEvent(
-                                                WebhookEvent.ThresholdPassedScales(SCALES_THRESHOLD, time, event),
-                                                WebhookEvent.THRESHOLD_PASSED_SCALES
-                                            )
-                                    }
-                                }
-
-                                if (nutCount > 0)
-                                    insertNuts.awaitRowsUpdated()
-
-                                if (scaleCount > 0)
-                                    insertScales.awaitRowsUpdated()
-                            }
+                            if ((recordingScales == null || recordingScales < SCALES_THRESHOLD) && eventScales!! >= SCALES_THRESHOLD)
+                                postEvent(
+                                    WebhookEvent.ThresholdPassedScales(SCALES_THRESHOLD, time, eventuallie.mergeHrefsForEvent(nuts, event)),
+                                    WebhookEvent.THRESHOLD_PASSED_SCALES
+                                )
                         }
                     }
-                }"
-            )
+
+                    if (nutCount > 0)
+                        insertNuts.awaitRowsUpdated()
+
+                    if (scaleCount > 0)
+                        insertScales.awaitRowsUpdated()
+                }
+            }
 
             return atTimeOfRecordingMap
         }
@@ -1549,7 +1544,7 @@ UPDATE library SET unredacted_since = 1620884700000 WHERE id = 'dcf7d279-1df0-47
 
             if (loggingEnabled) {
                 return@run nuts@{ time, event ->
-                    println("Logging + Insert: ${measureTime { logging(time, event, logger, insert(time, event)) }}")
+                    logging(time, event, logger, insert(time, event))
                 }
             } else {
                 return@run nuts@{ time, event ->
@@ -1587,7 +1582,7 @@ UPDATE library SET unredacted_since = 1620884700000 WHERE id = 'dcf7d279-1df0-47
                     .bind("$2", meetingCalledAt)
                     .await()
 
-                postEvent(WebhookEvent.NewHerringPool(source, meetingCalledAt), WebhookEvent.NEW_HERRING_POOL)
+                postEvent(WebhookEvent.NewHerringPool(eventuallie.mergeHrefsForEvent(nuts, source), meetingCalledAt), WebhookEvent.NEW_HERRING_POOL)
             }
 
 
@@ -1685,7 +1680,7 @@ UPDATE library SET unredacted_since = 1620884700000 WHERE id = 'dcf7d279-1df0-47
                 .bind("$2", now)
                 .await()
 
-            postEvent(WebhookEvent.NoteworthyEvents(event, now), WebhookEvent.NOTEWORTHY_EVENT)
+            postEvent(WebhookEvent.NoteworthyEvents(eventuallie.mergeHrefsForEvent(nuts, event), now), WebhookEvent.NOTEWORTHY_EVENT)
         }
     }
 

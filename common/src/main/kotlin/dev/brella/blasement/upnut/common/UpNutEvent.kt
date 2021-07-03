@@ -14,7 +14,9 @@ import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import java.util.*
 
 data class UpNutIngest(
@@ -48,9 +50,32 @@ data class UpNutEvent(
                 JsonObject(json.plus("scales" to value))
             } ?: metadata
         }
+
+    inline infix fun withMetadata(builder: JsonObjectBuilder.() -> Unit): UpNutEvent {
+        metadata = when (val metadata = metadata) {
+            is JsonNull -> buildJsonObject(builder)
+            is JsonObject -> buildJsonObject {
+                metadata.forEach { k, v -> put(k, v) }
+                builder()
+            }
+            else -> metadata
+        }
+
+        return this
+    }
+
+    inline infix fun copyWithMetadata(builder: JsonObjectBuilder.() -> Unit): UpNutEvent =
+        copy(metadata = when (val metadata = metadata) {
+            is JsonNull -> buildJsonObject(builder)
+            is JsonObject -> buildJsonObject {
+                metadata.forEach { k, v -> put(k, v) }
+                builder()
+            }
+            else -> metadata
+        })
 }
 
-object UnixTimestampSerialiser: KSerializer<Instant> {
+object UnixTimestampSerialiser : KSerializer<Instant> {
     override val descriptor: SerialDescriptor = PrimitiveSerialDescriptor("UnixTimestamp", PrimitiveKind.LONG)
 
     override fun deserialize(decoder: Decoder): Instant =
