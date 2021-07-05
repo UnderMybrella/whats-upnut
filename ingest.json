@@ -1,7 +1,8 @@
 {
   "default": {
     "limit": 500,
-    "total_limit": 10000
+    "total_limit": 50000,
+    "delay_ms": 1000
   },
   "sources": [
     {
@@ -40,9 +41,20 @@
     },
     {
       "type": "global",
-      "name": "GlobalFishing",
+      "name": "GlobalByNew",
+      "sort_by": "newest"
+    },
+    {
+      "type": "global",
+      "name": "GlobalByNewSpecial",
       "sort_by": "newest",
-      "feed_type": 175
+      "category": "special"
+    },
+    {
+      "type": "global",
+      "name": "GlobalByNewBook",
+      "sort_by": "newest",
+      "category": "book_feed"
     },
     {
       "type": "team",
@@ -66,14 +78,6 @@
     },
     {
       "type": "memoria"
-    }
-  ],
-  "filters": [
-    {
-      "type": "Roamer"
-    },
-    {
-      "type": "KLoNG"
     }
   ]
 }

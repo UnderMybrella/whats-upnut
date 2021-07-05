@@ -11,7 +11,7 @@ plugins {
 }
 
 group = "dev.brella"
-version = "1.9.9"
+version = "1.9.10"
 
 repositories {
     mavenCentral()
@@ -106,7 +106,18 @@ tasks.create<com.bmuschko.gradle.docker.tasks.image.Dockerfile>("createDockerfil
     copyFile("eventually-r2dbc.json", "/app/eventually-r2dbc.json")
     copyFile("logback.xml", "/app/logback.xml")
     entryPoint("java")
-    defaultCommand("-Dlogback.configurationFile=/app/logback.xml", "-Dupnut.ingest=/app/ingest.json", "-Dupnut.r2dbc=/app/upnuts-r2dbc.json", "-Dupnut.eventually=/app/eventually-r2dbc.json", "-jar", "/app/upnuts-ingest.jar")
+    defaultCommand(
+        "-XX:+UnlockExperimentalVMOptions",
+        "-XX:+UseCGroupMemoryLimitForHeap",
+        "-XX:MinHeapFreeRatio=20",
+        "-XX:MaxHeapFreeRatio=40",
+        "-Dlogback.configurationFile=/app/logback.xml",
+        "-Dupnut.ingest=/app/ingest.json",
+        "-Dupnut.r2dbc=/app/upnuts-r2dbc.json",
+        "-Dupnut.eventually=/app/eventually-r2dbc.json",
+        "-jar",
+        "/app/upnuts-ingest.jar"
+    )
 }
 
 tasks.create<Sync>("syncShadowJarArchive") {
