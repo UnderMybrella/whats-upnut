@@ -108,7 +108,6 @@ tasks.create<com.bmuschko.gradle.docker.tasks.image.Dockerfile>("createDockerfil
     entryPoint("java")
     defaultCommand(
         "-XX:+UnlockExperimentalVMOptions",
-        "-XX:+UseCGroupMemoryLimitForHeap",
         "-XX:MinHeapFreeRatio=20",
         "-XX:MaxHeapFreeRatio=40",
         "-Dlogback.configurationFile=/app/logback.xml",
