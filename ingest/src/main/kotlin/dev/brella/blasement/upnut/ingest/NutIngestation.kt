@@ -574,6 +574,52 @@ UPDATE library SET unredacted_since = 1620884700000 WHERE id = 'dcf7d279-1df0-47
 
                     add(ShellSource.Librarian(loopEvery.seconds, limit, delay.milliseconds, totalLimit, http, nuts.client, logger, sortBy = sortBy, category = category))
                 }
+                "ancient_history" -> {
+                    val name = element.getStringOrNull("name")
+
+                    val logger = LoggerFactory.getLogger(element.getStringOrNull("logger_name") ?: "dev.brella.blasement.upnut.ingest.${name ?: "AncientHistory"}")
+
+                    val limit = getIntInScope(element, "limit", 100)
+                    val loopEvery = getIntInScope(element, "loop_duration_s", 60)
+                    val delay = getLongInScope(element, "delay_ms", 100)
+                    val delayOnFailure = getLongInScope(element, "delay_on_failure_ms", 100)
+
+                    val category = when (val category = element.getStringOrNull("category")?.lowercase(Locale.getDefault())) {
+                        "plays" -> 0
+                        "changes" -> 1
+                        "special" -> 2
+                        "outcomes" -> 3
+                        "book_feed" -> 4
+                        "null" -> null
+                        null -> null
+                        else -> category.toIntOrNull()
+                    }
+
+                    add(ShellSource.HistoricalRecords(loopEvery.seconds, limit, delay.milliseconds, http, logger, category = category))
+                }
+                "memoria" -> {
+                    val name = element.getStringOrNull("name")
+
+                    val logger = LoggerFactory.getLogger(element.getStringOrNull("logger_name") ?: "dev.brella.blasement.upnut.ingest.${name ?: "AncientHistory"}")
+
+                    val limit = getIntInScope(element, "limit", 100)
+                    val loopEvery = getIntInScope(element, "loop_duration_s", 60)
+                    val delay = getLongInScope(element, "delay_ms", 100)
+                    val delayOnFailure = getLongInScope(element, "delay_on_failure_ms", 100)
+
+                    val category = when (val category = element.getStringOrNull("category")?.lowercase(Locale.getDefault())) {
+                        "plays" -> 0
+                        "changes" -> 1
+                        "special" -> 2
+                        "outcomes" -> 3
+                        "book_feed" -> 4
+                        "null" -> null
+                        null -> null
+                        else -> category.toIntOrNull()
+                    }
+
+                    add(ShellSource.Memoria(loopEvery.seconds, limit, delay.milliseconds, http, logger, category = category))
+                }
                 "liquid_friend" -> {
                     val name = element.getStringOrNull("name")
 
@@ -1071,7 +1117,7 @@ UPDATE library SET unredacted_since = 1620884700000 WHERE id = 'dcf7d279-1df0-47
 
             try {
                 nuts.client.inConnectionAwait { connection ->
-                    events.chunked(100).forEach { chunk ->
+                    events.chunked(1000).forEach { chunk ->
                         val statement = connection
                             .createStatement("INSERT INTO player_nuts (feed_id, player_id) VALUES ($1, $2) ON CONFLICT (feed_id, player_id) DO NOTHING")
 
@@ -1117,7 +1163,7 @@ UPDATE library SET unredacted_since = 1620884700000 WHERE id = 'dcf7d279-1df0-47
                            ?: emptyMap()*/
 
             nuts.client.inConnectionAwait { connection ->
-                events.chunked(100).forEach { chunk ->
+                events.chunked(1000).forEach { chunk ->
                     val statement = connection.createStatement("INSERT INTO game_nuts (feed_id, game_id) VALUES ($1, $2) ON CONFLICT (feed_id, game_id) DO NOTHING")
                     var count = 0
                     chunk.forEach { event ->
@@ -1155,7 +1201,7 @@ UPDATE library SET unredacted_since = 1620884700000 WHERE id = 'dcf7d279-1df0-47
                            ?: emptyMap()*/
 
             nuts.client.inConnectionAwait { connection ->
-                events.chunked(100).forEach { chunk ->
+                events.chunked(1000).forEach { chunk ->
                     val insertNuts = connection.createStatement("INSERT INTO team_nuts (feed_id, team_id) VALUES (\$1, \$2) ON CONFLICT (feed_id, team_id) DO NOTHING")
                     var insertCount = 0
                     chunk.forEach { event ->
@@ -1186,7 +1232,7 @@ UPDATE library SET unredacted_since = 1620884700000 WHERE id = 'dcf7d279-1df0-47
         @OptIn(ExperimentalTime::class)
         suspend inline fun metadata(events: List<UpNutEvent>) {
             nuts.client.inConnectionAwait { connection ->
-                events.chunked(100).forEach { chunk ->
+                events.chunked(1000).forEach { chunk ->
                     val statement =
                         connection.createStatement("INSERT INTO event_metadata (feed_id, created, season, tournament, type, day, phase, category) VALUES ( \$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8 ) ON CONFLICT (feed_id, type) DO NOTHING")
 

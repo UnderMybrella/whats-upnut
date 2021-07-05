@@ -71,6 +71,12 @@
     {
       "type": "liquid_friend",
       "total_limit": 2000
+    },
+    {
+      "type": "ancient_history"
+    },
+    {
+      "type": "memoria"
     }
   ]
 }

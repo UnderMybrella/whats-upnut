@@ -21,6 +21,7 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.put
 import org.slf4j.Logger
 import org.springframework.r2dbc.core.DatabaseClient
+import org.springframework.r2dbc.core.awaitSingleOrNull
 import java.time.Clock
 import java.time.Instant
 import java.util.*
@@ -446,37 +447,29 @@ public interface ShellSource {
                     try {
                         val feedEvents: MutableList<UUID> = ArrayList(investigate)
                         var start = 0
+                        var startTime: String? = databaseClient.sql("SELECT MIN(created) as start FROM event_metadata WHERE feed_id = ANY($1)")
+                            .bind("$1", investigate.toTypedArray())
+                            .map { row -> kotlinx.datetime.Instant.fromEpochMilliseconds(row.getValue<Long>("start")) }
+                            .awaitSingleOrNull()
+                            ?.toString()
 
                         when (source.sourceType) {
                             BlaseballSource.GLOBAL_FEED ->
                                 while (isActive && start < totalLimit && feedEvents.isNotEmpty()) {
                                     val now = now()
 
-                                    val response = httpClient.getGlobalFeedAsResponse(limit = limit, sort = sortBy, category = category, type = type, start = start)
-                                    val existingTag = etags[start]
-                                    val responseTag = response.headers["Etag"]
-                                    if (existingTag != null && existingTag == responseTag) {
-                                        start += limit
-                                        etagsContain[responseTag]?.let(feedEvents::removeAll)
-                                        logger.trace("Hit ETag; continuing at {}", start)
-                                    } else {
-                                        val list = response.receive<List<UpNutEvent>>()
-                                        val listIDs = list.map(UpNutEvent::id)
+                                    val response = httpClient.getGlobalFeedAsResponse(limit = limit, sort = if (startTime != null) BLASEBALL_SORTING_OLDEST_FIRST else sortBy, category = category, type = type, start = startTime ?: start)
+                                    val list = response.receive<List<UpNutEvent>>()
+                                    val listIDs = list.map(UpNutEvent::id)
 
-                                        feedEvents.removeAll(listIDs)
+                                    feedEvents.removeAll(listIDs)
 
-                                        mailbox.send(UpNutIngest(now, source, list))
+                                    mailbox.send(UpNutIngest(now, source, list))
+                                    if (list.size < limit) break
+                                    start += list.size
+                                    startTime = list.maxOfOrNull(UpNutEvent::created)?.toString() ?: startTime
 
-                                        if (list.size < limit) break
-
-                                        responseTag?.let {
-                                            etags[start] = it
-                                            etagsContain[it] = listIDs
-                                        }
-                                        start += list.size
-
-                                        delay(delayBetweenLoops)
-                                    }
+                                    delay(delayBetweenLoops)
                                 }
 
                             BlaseballSource.GAME_FEED -> {
@@ -489,31 +482,19 @@ public interface ShellSource {
                                 while (isActive && start < totalLimit && feedEvents.isNotEmpty()) {
                                     val now = now()
 
-                                    val response = httpClient.getGameFeedAsResponse(gameID, limit = limit, sort = sortBy, category = category, type = type, start = start)
-                                    val existingTag = etags[start]
-                                    val responseTag = response.headers["Etag"]
-                                    if (existingTag != null && existingTag == responseTag) {
-                                        start += limit
-                                        etagsContain[responseTag]?.let(feedEvents::removeAll)
-                                        logger.trace("Hit ETag; continuing at {}", start)
-                                    } else {
-                                        val list = response.receive<List<UpNutEvent>>()
-                                        val listIDs = list.map(UpNutEvent::id)
+                                    val response = httpClient.getGameFeedAsResponse(gameID, limit = limit, sort = if (startTime != null) BLASEBALL_SORTING_OLDEST_FIRST else sortBy, category = category, type = type, start = startTime ?: start)
+                                    val list = response.receive<List<UpNutEvent>>()
+                                    val listIDs = list.map(UpNutEvent::id)
 
-                                        feedEvents.removeAll(listIDs)
+                                    feedEvents.removeAll(listIDs)
 
-                                        mailbox.send(UpNutIngest(now, source, list))
+                                    mailbox.send(UpNutIngest(now, source, list))
 
-                                        if (list.size < limit) break
+                                    if (list.size < limit) break
+                                    start += list.size
+                                    startTime = list.maxOfOrNull(UpNutEvent::created)?.toString() ?: startTime
 
-                                        responseTag?.let {
-                                            etags[start] = it
-                                            etagsContain[it] = listIDs
-                                        }
-                                        start += list.size
-
-                                        delay(delayBetweenLoops)
-                                    }
+                                    delay(delayBetweenLoops)
                                 }
                             }
                             BlaseballSource.PLAYER_FEED -> {
@@ -526,31 +507,20 @@ public interface ShellSource {
                                 while (isActive && start < totalLimit && feedEvents.isNotEmpty()) {
                                     val now = now()
 
-                                    val response = httpClient.getPlayerFeedAsResponse(playerID, limit = limit, sort = sortBy, category = category, type = type, start = start)
-                                    val existingTag = etags[start]
-                                    val responseTag = response.headers["Etag"]
-                                    if (existingTag != null && existingTag == responseTag) {
-                                        start += limit
-                                        etagsContain[responseTag]?.let(feedEvents::removeAll)
-                                        logger.trace("Hit ETag; continuing at {}", start)
-                                    } else {
-                                        val list = response.receive<List<UpNutEvent>>()
-                                        val listIDs = list.map(UpNutEvent::id)
+                                    val response = httpClient.getPlayerFeedAsResponse(playerID, limit = limit, sort = if (startTime != null) BLASEBALL_SORTING_OLDEST_FIRST else sortBy, category = category, type = type, start = startTime ?: start)
 
-                                        feedEvents.removeAll(listIDs)
+                                    val list = response.receive<List<UpNutEvent>>()
+                                    val listIDs = list.map(UpNutEvent::id)
 
-                                        mailbox.send(UpNutIngest(now, source, list))
+                                    feedEvents.removeAll(listIDs)
 
-                                        if (list.size < limit) break
+                                    mailbox.send(UpNutIngest(now, source, list))
 
-                                        responseTag?.let {
-                                            etags[start] = it
-                                            etagsContain[it] = listIDs
-                                        }
-                                        start += list.size
+                                    if (list.size < limit) break
+                                    start += list.size
+                                    startTime = list.maxOfOrNull(UpNutEvent::created)?.toString() ?: startTime
 
-                                        delay(delayBetweenLoops)
-                                    }
+                                    delay(delayBetweenLoops)
                                 }
                             }
                             BlaseballSource.TEAM_FEED -> {
@@ -563,37 +533,27 @@ public interface ShellSource {
                                 while (isActive && start < totalLimit && feedEvents.isNotEmpty()) {
                                     val now = now()
 
-                                    val response = httpClient.getTeamFeedAsResponse(teamID, limit = limit, sort = sortBy, category = category, type = type, start = start)
-                                    val existingTag = etags[start]
-                                    val responseTag = response.headers["Etag"]
-                                    if (existingTag != null && existingTag == responseTag) {
-                                        start += limit
-                                        etagsContain[responseTag]?.let(feedEvents::removeAll)
-                                        logger.trace("Hit ETag; continuing at {}", start)
-                                    } else {
-                                        val list = response.receive<List<UpNutEvent>>()
-                                        val listIDs = list.map(UpNutEvent::id)
+                                    val response = httpClient.getTeamFeedAsResponse(teamID, limit = limit, sort = if (startTime != null) BLASEBALL_SORTING_OLDEST_FIRST else sortBy, category = category, type = type, start = startTime ?: start)
 
-                                        feedEvents.removeAll(listIDs)
+                                    val list = response.receive<List<UpNutEvent>>()
+                                    val listIDs = list.map(UpNutEvent::id)
 
-                                        mailbox.send(UpNutIngest(now, source, list))
+                                    feedEvents.removeAll(listIDs)
 
-                                        if (list.size < limit) break
+                                    mailbox.send(UpNutIngest(now, source, list))
 
-                                        responseTag?.let {
-                                            etags[start] = it
-                                            etagsContain[it] = listIDs
-                                        }
-                                        start += list.size
+                                    if (list.size < limit) break
 
-                                        delay(delayBetweenLoops)
-                                    }
+                                    start += list.size
+                                    startTime = list.maxOfOrNull(UpNutEvent::created)?.toString() ?: startTime
+
+                                    delay(delayBetweenLoops)
                                 }
                             }
                             BlaseballSource.STORY_CHAPTER -> {
                                 val storyChapter = source.sourceID?.toString()
                                 if (storyChapter == null) {
-                                    logger.warn("Player feed has a null source; how am I meant to find out about {}", feedEvents)
+                                    logger.warn("story feed has a null source; how am I meant to find out about {}", feedEvents)
                                     return@forEach
                                 }
 
@@ -601,30 +561,20 @@ public interface ShellSource {
                                     val now = now()
 
                                     val response = httpClient.getStoryFeedAsResponse(storyChapter, limit = limit, sort = sortBy, category = category, type = type, start = start)
-                                    val existingTag = etags[start]
-                                    val responseTag = response.headers["Etag"]
-                                    if (existingTag != null && existingTag == responseTag) {
-                                        start += limit
-                                        etagsContain[responseTag]?.let(feedEvents::removeAll)
-                                        logger.trace("Hit ETag; continuing at {}", start)
-                                    } else {
-                                        val list = response.receive<List<UpNutEvent>>()
-                                        val listIDs = list.map(UpNutEvent::id)
 
-                                        feedEvents.removeAll(listIDs)
+                                    val list = response.receive<List<UpNutEvent>>()
+                                    val listIDs = list.map(UpNutEvent::id)
 
-                                        mailbox.send(UpNutIngest(now, source, list))
+                                    feedEvents.removeAll(listIDs)
 
-                                        if (list.size < limit) break
+                                    mailbox.send(UpNutIngest(now, source, list))
 
-                                        responseTag?.let {
-                                            etags[start] = it
-                                            etagsContain[it] = listIDs
-                                        }
-                                        start += list.size
+                                    if (list.size < limit) break
 
-                                        delay(delayBetweenLoops)
-                                    }
+                                    start += list.size
+                                    startTime = list.maxOfOrNull(UpNutEvent::created)?.toString() ?: startTime
+
+                                    delay(delayBetweenLoops)
                                 }
                             }
                         }
@@ -633,6 +583,76 @@ public interface ShellSource {
                     }
                     delay(delayBetweenGames)
 
+                }
+            }
+        }
+    }
+
+    @ExperimentalTime
+    public class HistoricalRecords(
+        val loopEvery: Duration,
+        val limit: Int,
+        val delayBetweenLoops: Duration,
+        val httpClient: HttpClient,
+        val logger: Logger,
+        val category: Int? = null,
+        val type: Int? = null
+    ) : ShellSource {
+        override suspend fun CoroutineScope.processNuts(mailbox: SendChannel<UpNutIngest>) {
+            loopEvery(loopEvery, `while` = { isActive }) {
+                try {
+                    val source = BlaseballSource.global()
+                    var start: String? = null
+
+                    while (isActive) {
+                        val now = now()
+
+                        val response = httpClient.getGlobalFeedAsResponse(category = category, type = type, limit = limit, start = start, sort = BLASEBALL_SORTING_OLDEST_FIRST)
+                        val list = response.receive<List<UpNutEvent>>()
+                        mailbox.send(UpNutIngest(now, source, list))
+                        if (list.size < limit) break
+
+                        start = list.maxByOrNull(UpNutEvent::created)?.created?.toString() ?: start
+
+                        delay(delayBetweenLoops)
+                    }
+                } catch (th: Throwable) {
+                    logger.error("Dredging up historical records / Something Else Appears / Not Within Expected Parameters", th)
+                }
+            }
+        }
+    }
+
+    @ExperimentalTime
+    public class Memoria(
+        val loopEvery: Duration,
+        val limit: Int,
+        val delayBetweenLoops: Duration,
+        val httpClient: HttpClient,
+        val logger: Logger,
+        val category: Int? = null,
+        val type: Int? = null
+    ) : ShellSource {
+        override suspend fun CoroutineScope.processNuts(mailbox: SendChannel<UpNutIngest>) {
+            loopEvery(loopEvery, `while` = { isActive }) {
+                try {
+                    val source = BlaseballSource.global()
+                    var start: String? = null
+
+                    while (isActive) {
+                        val now = now()
+
+                        val response = httpClient.getGlobalFeedAsResponse(category = category, type = type, limit = limit, start = start, sort = BLASEBALL_SORTING_NEWEST_FIRST)
+                        val list = response.receive<List<UpNutEvent>>()
+                        mailbox.send(UpNutIngest(now, source, list))
+                        if (list.size < limit) break
+
+                        start = list.minByOrNull(UpNutEvent::created)?.created?.toString() ?: start
+
+                        delay(delayBetweenLoops)
+                    }
+                } catch (th: Throwable) {
+                    logger.error("Dredging up historical records / Something Else Appears / Not Within Expected Parameters", th)
                 }
             }
         }
