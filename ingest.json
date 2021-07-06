@@ -1,8 +1,7 @@
 {
   "default": {
     "limit": 500,
-    "total_limit": 50000,
-    "delay_ms": 1000
+    "total_limit": 50000
   },
   "sources": [
     {
@@ -72,9 +71,6 @@
     {
       "type": "liquid_friend",
       "total_limit": 2000
-    },
-    {
-      "type": "ancient_history"
     },
     {
       "type": "memoria"
