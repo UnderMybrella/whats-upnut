@@ -1,5 +1,7 @@
 package dev.brella.blasement.upnut.ingest
 
+import com.github.benmanes.caffeine.cache.Cache
+import com.github.benmanes.caffeine.cache.Caffeine
 import dev.brella.blasement.upnut.common.*
 import dev.brella.kornea.blaseball.BlaseballApi
 import dev.brella.kornea.errors.common.getOrElse
@@ -38,6 +40,7 @@ import org.springframework.r2dbc.core.bind as bindNullable
 import reactor.core.publisher.Mono
 import java.io.File
 import java.util.*
+import java.util.concurrent.TimeUnit
 import kotlin.collections.ArrayList
 import kotlin.collections.HashMap
 import kotlin.collections.HashSet
@@ -1030,6 +1033,23 @@ UPDATE library SET unredacted_since = 1620884700000 WHERE id = 'dcf7d279-1df0-47
         }
     }
 
+
+    val cacheBuilder = Caffeine.newBuilder()
+        .expireAfterAccess(5, TimeUnit.MINUTES)
+        .maximumSize(50_000)
+
+    val playersCache = cacheBuilder.build<UUID, List<UUID>>()
+    val teamsCache = cacheBuilder.build<UUID, List<UUID>>()
+    val gamesCache = cacheBuilder.build<UUID, List<UUID>>()
+    val eventMetadataCache = cacheBuilder.build<UUID, Int>()
+
+
+    val sourcesCache = cacheBuilder.build<BlaseballSource, MutableList<UUID>>()
+    val detectiveCache = cacheBuilder.build<BlaseballSource, MutableList<UUID>>()
+
+    inline operator fun <K: Any, V: Any> Cache<K, V>.get(key: K): V? = getIfPresent(key)
+    inline operator fun <K: Any, V: Any> Cache<K, V>.set(key: K, value: V) = put(key, value)
+
     inner class NutBuilder {
 /*        suspend inline fun players(event: UpNutEvent) {
             val players = nuts.client.sql("SELECT player_id FROM player_nuts WHERE feed_id = $1")
@@ -1096,10 +1116,10 @@ UPDATE library SET unredacted_since = 1620884700000 WHERE id = 'dcf7d279-1df0-47
         }
         */
 
-        val playersCache: MutableMap<UUID, List<UUID>> = HashMap()
-        val teamsCache: MutableMap<UUID, List<UUID>> = HashMap()
-        val gamesCache: MutableMap<UUID, List<UUID>> = HashMap()
-        val eventMetadataCache: MutableMap<UUID, Int> = HashMap()
+//        val playersCache: MutableMap<UUID, List<UUID>> = HashMap()
+//        val teamsCache: MutableMap<UUID, List<UUID>> = HashMap()
+//        val gamesCache: MutableMap<UUID, List<UUID>> = HashMap()
+//        val eventMetadataCache: MutableMap<UUID, Int> = HashMap()
 
         @OptIn(ExperimentalTime::class)
         suspend inline fun players(events: List<UpNutEvent>) {
@@ -1600,9 +1620,6 @@ UPDATE library SET unredacted_since = 1620884700000 WHERE id = 'dcf7d279-1df0-47
         }
     }
 
-    val sourcesCache: MutableMap<BlaseballSource, MutableList<UUID>> = HashMap()
-    val detectiveCache: MutableMap<BlaseballSource, MutableList<UUID>> = HashMap()
-
     suspend fun processPlasmaVoicemail(voicemails: Array<UpNutIngest>) {
         //First piece of work -- do we have any new herring pools ?
 
@@ -1640,8 +1657,8 @@ UPDATE library SET unredacted_since = 1620884700000 WHERE id = 'dcf7d279-1df0-47
                 val detectiveWorkStatement = connection.createStatement("INSERT INTO detective_work (feed_id, source_id, source_type) VALUES ($1, $2, $3) ON CONFLICT (feed_id, source_id, source_type) DO NOTHING")
                 var detectiveWorkCount = 0
 
-                val existingFeedForSource = sourcesCache.computeIfAbsent(ingest.source) { ArrayList() }
-                val existingWorkForSource = detectiveCache.computeIfAbsent(ingest.source) { ArrayList() }
+                val existingFeedForSource = sourcesCache.get(ingest.source) { ArrayList() }
+                val existingWorkForSource = detectiveCache.get(ingest.source) { ArrayList() }
 
                 val sourceID = ingest.source.sourceID
 

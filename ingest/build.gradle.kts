@@ -11,7 +11,7 @@ plugins {
 }
 
 group = "dev.brella"
-version = "1.9.10"
+version = "1.9.11"
 
 repositories {
     mavenCentral()
@@ -63,6 +63,8 @@ dependencies {
     implementation("io.r2dbc:r2dbc-postgresql:0.8.7.RELEASE")
     implementation("io.r2dbc:r2dbc-pool:0.9.0.M1")
 
+    implementation("com.github.ben-manes.caffeine:caffeine:3.0.1")
+
     testImplementation(kotlin("test-junit"))
 }
 
@@ -110,6 +112,7 @@ tasks.create<com.bmuschko.gradle.docker.tasks.image.Dockerfile>("createDockerfil
         "-XX:+UnlockExperimentalVMOptions",
         "-XX:MinHeapFreeRatio=20",
         "-XX:MaxHeapFreeRatio=40",
+        "-XX:+UseStringDeduplication",
         "-Dlogback.configurationFile=/app/logback.xml",
         "-Dupnut.ingest=/app/ingest.json",
         "-Dupnut.r2dbc=/app/upnuts-r2dbc.json",
