@@ -42,8 +42,10 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import org.slf4j.LoggerFactory
 import org.slf4j.event.Level
 import org.springframework.r2dbc.core.DatabaseClient
@@ -581,41 +583,51 @@ class WhatsUpNut {
                                 parameter("metadata._eventually_chapter_id", availableChapters.joinToString("_or_", prefix = "notexists_or_"))
                             }
                         }
-
-                        println("Calling ${url.clone().buildString()}")
                     }.map { list ->
                         val feedEventSources = list.map(UpNutEvent::id)
                         val map = upnut.eventually(feedEventSources, time, noneOfProviders, noneOfSources, oneOfProviders, oneOfSources) ?: emptyMap()
 
+                        val hrefs = upnut.sourcesForFeed(feedEventSources)
                         val upnuts =
                             provider?.let { upnut.isUpnutted(feedEventSources, time, it, source) } ?: emptyMap()
 
                         list.map inner@{ event ->
-                            val upnutted = upnuts[event.id]
-                            val metadata: JsonElement =
-                                if (upnutted?.first == true || upnutted?.second == true) {
-                                    when (val metadata = event.metadata) {
-                                        is JsonObject -> JsonObject(metadata + Pair("upnut", JsonPrimitive(true)))
-                                        is JsonNull -> JsonObject(mapOf("upnut" to JsonPrimitive(true)))
-                                        else -> event.metadata
-                                    }
-                                } else event.metadata
-
-                            var event = event.copy(metadata = metadata)
-
                             val resolution = map[event.id]
-                            val nuts = resolution?.first
-                            val scales = resolution?.second
+                            val upnutted = upnuts[event.id]
 
-                            if (nuts != event.nuts.intOrNull)
-                                event = event.copy(nuts = JsonPrimitive(nuts))
+                            var event = event.copy(nuts = JsonPrimitive(resolution?.first ?: 0))
 
-                            if (scales != event.scales.intOrNull)
-                                event.scales = JsonPrimitive(scales)
+                            event withMetadata {
+                                if (upnutted?.first == true || upnutted?.second == true) put("upnut", true)
+                            }
+
+                            hrefs[event.id]?.let { sources ->
+                                if (sources.isEmpty()) return@let
+
+                                event withMetadata {
+                                    sources.sortedByDescending(BlaseballSource::sourceType)
+                                        .mapNotNull { eventuallie.toHref(it, upnut) }
+                                        .let { list ->
+                                            if (list.isEmpty()) return@let
+                                            putJsonArray("_upnuts_hrefs") {
+                                                list.distinct().forEach { add(it) }
+                                            }
+                                        }
+                                }
+                            }
+
+                            event.apply {
+                                if (scales == JsonNull) {
+                                    scales = JsonPrimitive(resolution?.second)
+                                } else {
+                                    scales = JsonPrimitive(resolution?.second ?: 0)
+                                }
+                            }
 
                             (event.metadata as? JsonObject)
                                 ?.getBooleanOrNull("redacted")
                                 ?.let { isRedacted ->
+                                    val scales = resolution?.second
                                     if (!isRedacted && (scales == null || scales < 1_000)) {
                                         event = event.copy(
                                             type = -1,

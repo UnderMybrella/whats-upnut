@@ -11,7 +11,7 @@ plugins {
 }
 
 group = "dev.brella"
-version = "1.7.9"
+version = "1.7.10"
 
 repositories {
     mavenCentral()
@@ -121,9 +121,24 @@ tasks.create<com.bmuschko.gradle.docker.tasks.image.Dockerfile>("createDockerfil
     copyFile("logback.xml", "/app/logback.xml")
     copyFile("application.conf", "/app/application.conf")
     entryPoint("java")
-    defaultCommand("-Dlogback.configurationFile=/app/logback.xml", "-Dupnut.r2dbc=/app/upnuts-r2dbc.json", "-Dupnut.eventually=/app/eventually-r2dbc.json", "-jar", "/app/upnuts-query.jar", "-config=/app/application.conf")
+
+    defaultCommand(
+        "-Dcom.sun.management.jmxremote",
+        "-Dcom.sun.management.jmxremote.port=9010",
+        "-Dcom.sun.management.jmxremote.authenticate=false",
+        "-Dcom.sun.management.jmxremote.ssl=false",
+        "-Djava.rmi.server.hostname=127.0.0.1",
+
+        "-Dlogback.configurationFile=/app/logback.xml",
+        "-Dupnut.r2dbc=/app/upnuts-r2dbc.json",
+        "-Dupnut.eventually=/app/eventually-r2dbc.json",
+        "-jar",
+        "/app/upnuts-query.jar",
+        "-config=/app/application.conf"
+    )
 
     exposePort(9796)
+    runCommand("apk --update --no-cache add openssh")
 }
 
 tasks.create<Sync>("syncShadowJarArchive") {

@@ -147,7 +147,7 @@ class Eventuallie(config: JsonObject) {
                         .let { list ->
                             if (list.isEmpty()) return@let
                             putJsonArray("_upnuts_hrefs") {
-                                list.forEach { add(it) }
+                                list.distinct().forEach { add(it) }
                             }
                         }
                 }
@@ -174,7 +174,7 @@ class Eventuallie(config: JsonObject) {
                 ?.let { list ->
                     if (list.isEmpty()) return@let
                     putJsonArray("_upnuts_hrefs") {
-                        list.forEach { add(it) }
+                        list.distinct().forEach { add(it) }
                     }
                 }
         }
@@ -184,7 +184,7 @@ class Eventuallie(config: JsonObject) {
 
     suspend inline fun toHref(source: BlaseballSource, upnuts: UpNutClient): String? {
         return when (source.sourceType) {
-            BlaseballSource.GLOBAL_FEED -> "https://www.blaseball.com"
+            BlaseballSource.GLOBAL_FEED -> "https://www.blaseball.com/global"
             BlaseballSource.PLAYER_FEED -> "https://www.blaseball.com/player/${source.sourceID}"
             BlaseballSource.TEAM_FEED -> "https://www.blaseball.com/team/${source.sourceID}"
             BlaseballSource.STORY_CHAPTER -> {
