@@ -150,7 +150,7 @@ class UpNutClient(config: JsonObject) {
                         prefix = "WHERE ",
                         separator = " AND "
                     )
-                } GROUP BY feed_id) as list JOIN (SELECT feed_id, created FROM event_metadata) as meta ON list.feed_id = meta.feed_id ORDER BY sort DESC, list.nuts DESC, list.scales DESC, list.time DESC LIMIT $LIMIT_VAR OFFSET $OFFSET_VAR"
+                } GROUP BY feed_id) as list WHERE (list.scales IS NULL OR list.scales = 0) JOIN (SELECT feed_id, created FROM event_metadata) as meta ON list.feed_id = meta.feed_id ORDER BY sort DESC, list.nuts DESC, list.time DESC LIMIT $LIMIT_VAR OFFSET $OFFSET_VAR"
             )
 
         inline fun hotPSQLWithTime(vararg and: String) =
@@ -175,7 +175,7 @@ class UpNutClient(config: JsonObject) {
                         prefix = "WHERE ",
                         separator = " AND "
                     )
-                } GROUP BY feed_id ORDER BY nuts DESC, scales DESC LIMIT $LIMIT_VAR OFFSET $OFFSET_VAR"
+                } GROUP BY feed_id ORDER BY nuts DESC, scales ASC LIMIT $LIMIT_VAR OFFSET $OFFSET_VAR"
             )
 
         inline fun topPSQLWithTime(vararg and: String) =

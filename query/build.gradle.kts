@@ -11,7 +11,7 @@ plugins {
 }
 
 group = "dev.brella"
-version = "1.7.10"
+version = "1.7.11"
 
 repositories {
     mavenCentral()
