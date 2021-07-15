@@ -145,7 +145,7 @@ class UpNutClient(config: JsonObject) {
         //        @Language("PostgreSQL")
         inline fun hotPSQL(vararg where: String) =
             NutSqlStatement(
-                "SELECT list.feed_id, list.nuts, list.scales, list.time, floor(log(10, list.nuts) + (event_metadata.created / 1000 / 604800)) as sort FROM (SELECT feed_id, SUM(nuts) AS nuts, SUM(scales) as scales, MAX(time) as time FROM upnuts WHERE (scales IS NULL OR scales = 0) ${
+                "SELECT list.feed_id, list.nuts, list.scales, list.time, floor(log10(list.nuts) + (event_metadata.created / 1000 / 604800)) as sort FROM (SELECT feed_id, SUM(nuts) AS nuts, SUM(scales) as scales, MAX(time) as time FROM upnuts WHERE (scales IS NULL OR scales = 0) ${
                     where.joinToString(
                         prefix = " AND ",
                         separator = " AND "
@@ -198,7 +198,7 @@ class UpNutClient(config: JsonObject) {
 
         inline fun hotScalesPSQL(vararg where: String) =
             NutSqlStatement {
-                appendLine("SELECT list.feed_id, list.nuts, list.scales, list.time, floor(log(10, list.scales) + (event_metadata.created / 1000 / 604800)) as sort")
+                appendLine("SELECT list.feed_id, list.nuts, list.scales, list.time, floor(log10(list.scales) + (event_metadata.created / 1000 / 604800)) as sort")
                 appendLine("FROM (")
 
                 appendLine("SELECT feed_id, SUM(nuts) AS nuts, SUM(scales) as scales, MAX(time) as time")
