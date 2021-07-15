@@ -145,12 +145,12 @@ class UpNutClient(config: JsonObject) {
         //        @Language("PostgreSQL")
         inline fun hotPSQL(vararg where: String) =
             NutSqlStatement(
-                "SELECT list.feed_id, list.nuts, list.scales, list.time, floor(log(10, list.nuts) + (meta.created / 1000 / 604800)) as sort FROM (SELECT feed_id, SUM(nuts) AS nuts, SUM(scales) as scales, MAX(time) as time FROM upnuts WHERE (scales IS NULL OR scales = 0) ${
+                "SELECT list.feed_id, list.nuts, list.scales, list.time, floor(log(10, list.nuts) + (event_metadata.created / 1000 / 604800)) as sort FROM (SELECT feed_id, SUM(nuts) AS nuts, SUM(scales) as scales, MAX(time) as time FROM upnuts WHERE (scales IS NULL OR scales = 0) ${
                     where.joinToString(
                         prefix = " AND ",
                         separator = " AND "
                     )
-                } GROUP BY feed_id) as list JOIN (SELECT feed_id, created FROM event_metadata) as meta ON list.feed_id = meta.feed_id ORDER BY sort DESC, list.nuts DESC, list.time DESC LIMIT $LIMIT_VAR OFFSET $OFFSET_VAR"
+                } GROUP BY feed_id) as list LEFT JOIN event_metadata ON list.feed_id = event_metadata.feed_id ORDER BY sort DESC, list.nuts DESC, list.time DESC LIMIT $LIMIT_VAR OFFSET $OFFSET_VAR"
             )
 
         inline fun hotPSQLWithTime(vararg and: String) =
@@ -198,7 +198,7 @@ class UpNutClient(config: JsonObject) {
 
         inline fun hotScalesPSQL(vararg where: String) =
             NutSqlStatement {
-                appendLine("SELECT list.feed_id, list.nuts, list.scales, list.time, floor(log(10, list.scales) + (meta.created / 1000 / 604800)) as sort")
+                appendLine("SELECT list.feed_id, list.nuts, list.scales, list.time, floor(log(10, list.scales) + (event_metadata.created / 1000 / 604800)) as sort")
                 appendLine("FROM (")
 
                 appendLine("SELECT feed_id, SUM(nuts) AS nuts, SUM(scales) as scales, MAX(time) as time")
@@ -208,11 +208,7 @@ class UpNutClient(config: JsonObject) {
                 appendLine("HAVING SUM(scales) < 1000")
 
                 appendLine(") as list")
-                appendLine("JOIN (")
-
-                appendLine("SELECT feed_id, created FROM event_metadata")
-
-                appendLine(") as meta ON list.feed_id = meta.feed_id")
+                appendLine("LEFT JOIN event_metadata ON list.feed_id = meta.feed_id")
                 appendLine("ORDER BY sort DESC, list.scales DESC, list.nuts DESC, list.time DESC")
                 appendLine("LIMIT $LIMIT_VAR OFFSET $OFFSET_VAR")
             }
@@ -301,7 +297,12 @@ class UpNutClient(config: JsonObject) {
 
             builder.build()
         }
-    )
+    ).let {
+        InitialisedConnectionFactory(it) { connection ->
+            connection.createStatement("SET work_mem = '16 MB'")
+                .execute()
+        }
+    }
 
     val client = DatabaseClient.create(connectionFactory)
 

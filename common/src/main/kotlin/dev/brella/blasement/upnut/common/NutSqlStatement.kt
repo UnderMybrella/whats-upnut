@@ -22,6 +22,7 @@ import dev.brella.blasement.upnut.common.UpNutClient.Companion.TIME_VAR
 import dev.brella.blasement.upnut.common.UpNutClient.Companion.TOURNAMENT_VAR
 import dev.brella.blasement.upnut.common.UpNutClient.Companion.TYPE_VAR
 import dev.brella.blasement.upnut.common.UpNutClient.Companion.UUID_VAR
+import kotlinx.coroutines.reactive.awaitFirst
 import org.intellij.lang.annotations.Language
 import org.springframework.r2dbc.core.DatabaseClient
 
