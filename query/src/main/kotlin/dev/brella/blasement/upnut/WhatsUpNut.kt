@@ -6,6 +6,7 @@ import com.soywiz.klock.format
 import dev.brella.blasement.upnut.common.*
 import dev.brella.kornea.blaseball.base.common.BLASEBALL_TIME_PATTERN
 import dev.brella.kornea.errors.common.KorneaResult
+import dev.brella.kornea.errors.common.doOnSuccess
 import dev.brella.kornea.errors.common.map
 import dev.brella.ktornea.common.KorneaHttpResult
 import dev.brella.ktornea.common.getAsResult
@@ -24,6 +25,7 @@ import io.ktor.client.statement.*
 import io.ktor.client.utils.*
 import io.ktor.features.*
 import io.ktor.http.*
+import io.ktor.http.content.*
 import io.ktor.request.*
 import io.ktor.response.*
 import io.ktor.routing.*
@@ -43,15 +45,12 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
-import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import org.slf4j.LoggerFactory
 import org.slf4j.event.Level
 import org.springframework.r2dbc.core.DatabaseClient
 import org.springframework.r2dbc.core.await
-import org.springframework.r2dbc.core.awaitOne
-import org.springframework.r2dbc.core.awaitOneOrNull
 import org.springframework.r2dbc.core.awaitRowsUpdated
 import org.springframework.r2dbc.core.awaitSingleOrNull
 import org.springframework.r2dbc.core.bind as bindNullable
@@ -59,6 +58,10 @@ import java.io.File
 import java.nio.ByteBuffer
 import java.security.KeyFactory
 import java.security.spec.X509EncodedKeySpec
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatterBuilder
+import java.time.format.SignStyle
+import java.time.temporal.ChronoField
 import java.util.*
 import java.util.concurrent.TimeUnit
 import kotlin.collections.LinkedHashMap
@@ -72,6 +75,48 @@ class WhatsUpNut {
         val REMOVE_PARAMETERS_TEAM_EVENTUALLY = REMOVE_PARAMETERS_GLOBAL_EVENTUALLY + arrayOf("teamTags", "id")
         val REMOVE_PARAMETERS_PLAYER_EVENTUALLY = REMOVE_PARAMETERS_GLOBAL_EVENTUALLY + arrayOf("playerTags", "id")
         val REMOVE_PARAMETERS_GAME_EVENTUALLY = REMOVE_PARAMETERS_GLOBAL_EVENTUALLY + arrayOf("gameTags", "id")
+
+        val MMDDYYYY_FORMATTER = DateTimeFormatterBuilder()
+            .appendValue(ChronoField.MONTH_OF_YEAR, 2, 2, SignStyle.EXCEEDS_PAD)
+            .appendLiteral('/')
+            .appendValue(ChronoField.DAY_OF_MONTH, 2, 2, SignStyle.EXCEEDS_PAD)
+            .appendLiteral('/')
+            .appendValue(ChronoField.YEAR, 4, 10, SignStyle.EXCEEDS_PAD)
+            .appendLiteral(' ')
+            .appendValue(ChronoField.HOUR_OF_DAY, 2, 2, SignStyle.EXCEEDS_PAD)
+            .appendLiteral(':')
+            .appendValue(ChronoField.MINUTE_OF_HOUR, 2, 2, SignStyle.EXCEEDS_PAD)
+            .appendLiteral(':')
+            .appendValue(ChronoField.SECOND_OF_MINUTE, 2, 2, SignStyle.EXCEEDS_PAD)
+            .toFormatter()
+
+        val DDMMYYYY_FORMATTER = DateTimeFormatterBuilder()
+            .appendValue(ChronoField.DAY_OF_MONTH, 2, 2, SignStyle.EXCEEDS_PAD)
+            .appendLiteral('/')
+            .appendValue(ChronoField.MONTH_OF_YEAR, 2, 2, SignStyle.EXCEEDS_PAD)
+            .appendLiteral('/')
+            .appendValue(ChronoField.YEAR, 4, 10, SignStyle.EXCEEDS_PAD)
+            .appendLiteral(' ')
+            .appendValue(ChronoField.HOUR_OF_DAY, 2, 2, SignStyle.EXCEEDS_PAD)
+            .appendLiteral(':')
+            .appendValue(ChronoField.MINUTE_OF_HOUR, 2, 2, SignStyle.EXCEEDS_PAD)
+            .appendLiteral(':')
+            .appendValue(ChronoField.SECOND_OF_MINUTE, 2, 2, SignStyle.EXCEEDS_PAD)
+            .toFormatter()
+
+        val YYYYMMDD_FORMATTER = DateTimeFormatterBuilder()
+            .appendValue(ChronoField.YEAR, 4, 10, SignStyle.EXCEEDS_PAD)
+            .appendLiteral('/')
+            .appendValue(ChronoField.MONTH_OF_YEAR, 2, 2, SignStyle.EXCEEDS_PAD)
+            .appendLiteral('/')
+            .appendValue(ChronoField.DAY_OF_MONTH, 2, 2, SignStyle.EXCEEDS_PAD)
+            .appendLiteral(' ')
+            .appendValue(ChronoField.HOUR_OF_DAY, 2, 2, SignStyle.EXCEEDS_PAD)
+            .appendLiteral(':')
+            .appendValue(ChronoField.MINUTE_OF_HOUR, 2, 2, SignStyle.EXCEEDS_PAD)
+            .appendLiteral(':')
+            .appendValue(ChronoField.SECOND_OF_MINUTE, 2, 2, SignStyle.EXCEEDS_PAD)
+            .toFormatter()
     }
 
     val configJson: JsonObject? = File(property("upnut.query") ?: "upnut.json").takeIf(File::exists)?.readText()?.let(Json::decodeFromString)
@@ -739,6 +784,120 @@ class WhatsUpNut {
                         }
                     }
                 }.respond(call)
+            }
+
+            get("/csv") {
+                val parameters = call.request.queryParameters
+
+                val time = parameters["time"]?.let { time ->
+                    time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
+                } ?: call.request.header("X-UpNut-Time")?.let { time ->
+                    time.toLongOrNull() ?: BLASEBALL_TIME_PATTERN.tryParse(time)?.utc?.unixMillisLong
+                }
+
+                val oneOfSources = (parameters["filter_sources"] ?: parameters["one_of_sources"]
+                                    ?: call.request.header("X-UpNut-FilterSources") ?: call.request.header("X-UpNut-OneOfSources"))
+                    ?.split(',')
+                    ?.mapNotNull(String::uuidOrNull)
+
+                val noneOfSources = (parameters["filter_sources_not"] ?: parameters["none_of_sources"]
+                                     ?: call.request.header("X-UpNut-FilterSourcesNot") ?: call.request.header("X-UpNut-NoneOfSources"))
+                    ?.split(',')
+                    ?.mapNotNull(String::uuidOrNull)
+
+                val oneOfProviders = (parameters["filter_providers"] ?: parameters["one_of_providers"]
+                                      ?: call.request.header("X-UpNut-FilterProviders") ?: call.request.header("X-UpNut-OneOfProviders"))
+                    ?.split(',')
+                    ?.mapNotNull(String::uuidOrNull)
+
+                val noneOfProviders = (parameters["filter_providers_not"] ?: parameters["none_of_providers"]
+                                       ?: call.request.header("X-UpNut-FilterProvidersNot") ?: call.request.header("X-UpNut-NoneOfProviders"))
+                    ?.split(',')
+                    ?.mapNotNull(String::uuidOrNull)
+
+                //First, we do a quick check for what books are available
+                val availableChapters = upnut.client.sql("SELECT id FROM library WHERE unredacted_since IS NOT NULL AND unredacted_since < $1")
+                                            .bindNullable("$1", time)
+                                            .map { row -> row.getValue<UUID>("id") }
+                                            .all()
+                                            .collectList()
+                                            .awaitFirstOrNull() ?: emptyList()
+
+                http.getAsResult<List<UpNutEvent>>("https://api.sibr.dev/eventually/v2/events") {
+                    url.parameters.appendAll(parameters)
+
+                    if (availableChapters.isEmpty()) {
+                        parameter("metadata._eventually_chapter_id", "notexists")
+                    } else {
+                        parameter("metadata._eventually_chapter_id", availableChapters.joinToString("_or_", prefix = "notexists_or_"))
+                    }
+                }.map { list ->
+                    val map = upnut.eventuallyNutsList(list.map(UpNutEvent::id), time, noneOfProviders, noneOfSources, oneOfProviders, oneOfSources) ?: emptyMap()
+
+                    list.map { event ->
+                        val nuts = map[event.id]
+
+                        NutEpochEvent(
+                            event.id,
+                            event.playerTags,
+                            event.teamTags,
+                            event.gameTags,
+                            event.created,
+                            event.season,
+                            event.tournament,
+                            event.type,
+                            event.day,
+                            event.phase,
+                            event.category,
+                            event.description,
+                            nuts ?: emptyList(),
+                            event.metadata
+                        )
+                    }
+                }
+                    .doOnSuccess { list ->
+                        val message = WriterContent(
+                            {
+                                appendLine("id,created,season,day,description,nuts,scales,time,mmddyyyy,ddmmyyyy,yyyymmdd")
+
+                                val nutTime = list.flatMap { it.nuts }.map(NutsEpoch::time).sorted()
+                                val start = nutTime.minOrNull() ?: 0
+                                val end = nutTime.maxOrNull() ?: start
+
+                                val interval = parameters["interval"]?.toLongOrNull()
+                                               ?: ((end - start) / (parameters["series"]?.toIntOrNull() ?: 10))
+
+                                for (step in start..end step interval) {
+                                    val mmddyyyyFormat = java.time.Instant.ofEpochMilli(step)
+                                        .atOffset(ZoneOffset.UTC)
+                                        .format(MMDDYYYY_FORMATTER)
+
+                                    val ddmmyyyyFormat = java.time.Instant.ofEpochMilli(step)
+                                        .atOffset(ZoneOffset.UTC)
+                                        .format(DDMMYYYY_FORMATTER)
+
+                                    val yyyymmddFormat = java.time.Instant.ofEpochMilli(step)
+                                        .atOffset(ZoneOffset.UTC)
+                                        .format(YYYYMMDD_FORMATTER)
+
+                                    list.forEach { event ->
+                                        var nuts = 0
+                                        var scales = 0
+                                        for (nut in event.nuts) {
+                                            if (nut.time > step) break
+
+                                            nuts += nut.nuts ?: 0
+                                            scales += nut.scales ?: 0
+                                        }
+
+                                        appendLine("${event.id},${event.created.toEpochMilliseconds()},${event.season},${event.day},\"${event.description.replace("\"", "\\\"")}\",${nuts},${scales},${step},${mmddyyyyFormat},${ddmmyyyyFormat},${yyyymmddFormat}")
+                                    }
+                                }
+                            }, ContentType.Text.CSV, HttpStatusCode.OK)
+
+                        call.response.header(HttpHeaders.ContentDisposition, "filename=events.csv")
+                        call.respond(message)
+                    }.respondOnFailure(call)
             }
 
             route("/feed") {
