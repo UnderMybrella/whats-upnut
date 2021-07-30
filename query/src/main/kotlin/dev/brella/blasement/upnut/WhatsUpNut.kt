@@ -853,12 +853,37 @@ class WhatsUpNut {
                             nuts ?: emptyList(),
                             event.metadata
                         )
-                    }
+                    }.sortedBy(NutEpochEvent::created)
                 }
                     .doOnSuccess { list ->
                         val message = WriterContent(
                             {
-                                appendLine("id,created,season,day,description,nuts,scales,time,mmddyyyy,ddmmyyyy,yyyymmdd")
+                                append("mmddyyyy,")
+                                val hasNuts: MutableSet<UUID> = HashSet()
+                                val hasScales: MutableSet<UUID> = HashSet()
+
+                                list.forEach { event ->
+                                    val line = event.description
+                                        .replace("\"", "\\\"")
+                                        .replace("\n", " / ")
+
+                                    if (event.nuts.any { (it.nuts ?: 0) > 0}) {
+                                        append('"')
+                                        append(line)
+                                        append(" (Shells)\",")
+
+                                        hasNuts.add(event.id)
+                                    }
+
+                                    if (event.nuts.any { (it.scales ?: 0) > 0}) {
+                                        append('"')
+                                        append(line)
+                                        append(" (Scales)\",")
+
+                                        hasScales.add(event.id)
+                                    }
+                                }
+                                appendLine()
 
                                 val nutTime = list.flatMap { it.nuts }.map(NutsEpoch::time).sorted()
                                 val start = nutTime.minOrNull() ?: 0
@@ -871,15 +896,17 @@ class WhatsUpNut {
                                     val mmddyyyyFormat = java.time.Instant.ofEpochMilli(step)
                                         .atOffset(ZoneOffset.UTC)
                                         .format(MMDDYYYY_FORMATTER)
+//
+//                                    val ddmmyyyyFormat = java.time.Instant.ofEpochMilli(step)
+//                                        .atOffset(ZoneOffset.UTC)
+//                                        .format(DDMMYYYY_FORMATTER)
+//
+//                                    val yyyymmddFormat = java.time.Instant.ofEpochMilli(step)
+//                                        .atOffset(ZoneOffset.UTC)
+//                                        .format(YYYYMMDD_FORMATTER)
 
-                                    val ddmmyyyyFormat = java.time.Instant.ofEpochMilli(step)
-                                        .atOffset(ZoneOffset.UTC)
-                                        .format(DDMMYYYY_FORMATTER)
-
-                                    val yyyymmddFormat = java.time.Instant.ofEpochMilli(step)
-                                        .atOffset(ZoneOffset.UTC)
-                                        .format(YYYYMMDD_FORMATTER)
-
+                                    append(mmddyyyyFormat)
+                                    append(",")
                                     list.forEach { event ->
                                         var nuts = 0
                                         var scales = 0
@@ -890,12 +917,21 @@ class WhatsUpNut {
                                             scales += nut.scales ?: 0
                                         }
 
-                                        appendLine("${event.id},${event.created.toEpochMilliseconds()},${event.season},${event.day},\"${event.description.replace("\"", "\\\"")}\",${nuts},${scales},${step},${mmddyyyyFormat},${ddmmyyyyFormat},${yyyymmddFormat}")
+                                        if (event.id in hasNuts) {
+                                            append(nuts.toString())
+                                            append(',')
+                                        }
+
+                                        if (event.id in hasScales) {
+                                            append(scales.toString())
+                                            append(',')
+                                        }
                                     }
+                                    appendLine()
                                 }
                             }, ContentType.Text.CSV, HttpStatusCode.OK)
 
-                        call.response.header(HttpHeaders.ContentDisposition, "filename=events.csv")
+                        call.response.header(HttpHeaders.ContentDisposition, "filename=${parameters["filename"] ?: "events"}.csv")
                         call.respond(message)
                     }.respondOnFailure(call)
             }
