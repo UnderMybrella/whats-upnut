@@ -275,7 +275,7 @@ UPDATE library SET unredacted_since = 1620884700000 WHERE id = 'dcf7d279-1df0-47
     @OptIn(ExperimentalStdlibApi::class, ExperimentalTime::class)
     val sources = buildList<ShellSource> {
         val teams = runBlocking { blaseballApi.getAllTeams().getOrElse(emptyList()) }
-        val players = runBlocking { http.get<List<PlayerIdPair>>("https://www.blaseball.com/database/playerNamesIds") }
+        val players = runBlocking { http.get<List<PlayerIdPair>>("https://api.blaseball.com/database/playerNamesIds") }
             .toReverseMap()
 
         config.getJsonArrayOrNull("sources")?.forEach { element ->

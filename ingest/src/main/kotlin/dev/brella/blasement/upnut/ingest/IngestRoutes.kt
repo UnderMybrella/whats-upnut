@@ -16,7 +16,7 @@ suspend inline fun HttpClient.getGlobalFeedAsResponse(category: Int? = null, lim
 
 
 suspend inline fun <reified T> HttpClient.getGlobalFeedAs(category: Int? = null, limit: Int = 100, type: Int? = null, sort: Int? = null, start: Any? = null): T =
-    get("https://blaseball.com/database/feed/global") {
+    get("https://api.blaseball.com/database/feed/global") {
         if (category != null) parameter("category", category)
         if (type != null) parameter("type", type)
         if (limit != BlaseballDatabaseService.YES_BRELLA_I_WOULD_LIKE_UNLIMITED_EVENTS) parameter("limit", limit)
@@ -31,7 +31,7 @@ suspend inline fun HttpClient.getTeamFeedAsResponse(teamID: String, category: In
     getTeamFeedAs(teamID, category, limit, type, sort, start)
 
 suspend inline fun <reified T> HttpClient.getTeamFeedAs(teamID: String, category: Int? = null, limit: Int = 100, type: Int? = null, sort: Int? = null, start: Any? = null): T =
-    get("https://blaseball.com/database/feed/team") {
+    get("https://api.blaseball.com/database/feed/team") {
         parameter("id", teamID)
 
         if (category != null) parameter("category", category)
@@ -48,7 +48,7 @@ suspend inline fun HttpClient.getGameFeedAsResponse(gameID: String, category: In
     getGameFeedAs(gameID, category, limit, type, sort, start)
 
 suspend inline fun <reified T> HttpClient.getGameFeedAs(gameID: String, category: Int? = null, limit: Int = 100, type: Int? = null, sort: Int? = null, start: Any? = null): T =
-    get("https://blaseball.com/database/feed/game") {
+    get("https://api.blaseball.com/database/feed/game") {
         parameter("id", gameID)
 
         if (category != null) parameter("category", category)
@@ -65,7 +65,7 @@ suspend inline fun HttpClient.getPlayerFeedAsResponse(playerID: String, category
     getPlayerFeedAs(playerID, category, limit, type, sort, start)
 
 suspend inline fun <reified T> HttpClient.getPlayerFeedAs(playerID: String, category: Int? = null, limit: Int = 100, type: Int? = null, sort: Int? = null, start: Any? = null): T =
-    get("https://blaseball.com/database/feed/player") {
+    get("https://api.blaseball.com/database/feed/player") {
         parameter("id", playerID)
 
         if (category != null) parameter("category", category)
@@ -82,7 +82,7 @@ suspend inline fun HttpClient.getStoryFeedAsResponse(chapterID: String, category
     getStoryFeedAs(chapterID, category, limit, type, sort, start)
 
 suspend inline fun <reified T> HttpClient.getStoryFeedAs(chapterID: String, category: Int? = null, limit: Int = 100, type: Int? = null, sort: Int? = null, start: Any? = null): T =
-    get("https://blaseball.com/database/feed/story") {
+    get("https://api.blaseball.com/database/feed/story") {
         parameter("id", chapterID)
 
         if (category != null) parameter("category", category)
@@ -96,7 +96,7 @@ suspend inline fun <reified T> HttpClient.getStoryFeedAs(chapterID: String, cate
 data class BlaseballPlayerName(val id: String, val name: String)
 
 suspend inline fun HttpClient.getAllPlayers(): List<BlaseballPlayerName> =
-    get("https://www.blaseball.com/database/playerNamesIds")
+    get("https://api.blaseball.com/database/playerNamesIds")
 
 suspend inline fun HttpClient.getTodaysGames(): List<JsonObject> =
     get("https://api.sibr.dev/corsmechanics/stream/games/schedule") //thanks, me!

@@ -634,25 +634,40 @@ public interface ShellSource {
         val type: Int? = null
     ) : ShellSource {
         override suspend fun CoroutineScope.processNuts(mailbox: SendChannel<UpNutIngest>) {
+            val etags: MutableMap<String?, String> = HashMap()
+            val etagsStart: MutableMap<String?, String> = HashMap()
+
             loopEvery(loopEvery, `while` = { isActive }) {
                 try {
-                    val source = BlaseballSource.global()
                     var start: String? = null
 
                     while (isActive) {
                         val now = now()
+                        val response = httpClient.getGlobalFeedAsResponse(limit = limit, sort = BLASEBALL_SORTING_NEWEST_FIRST, category = category, type = type, start = start)
+                        val existingTag = etags[start]
+                        val responseTag = response.headers["Etag"]
+                        if (existingTag != null && existingTag == responseTag) {
+                            start = etagsStart[start] ?: break
+                            logger.trace("Hit ETag; continuing at {}", start)
+                        } else {
+                            val list = response.receive<List<UpNutEvent>>()
 
-                        val response = httpClient.getGlobalFeedAsResponse(category = category, type = type, limit = limit, start = start, sort = BLASEBALL_SORTING_NEWEST_FIRST)
-                        val list = response.receive<List<UpNutEvent>>()
-                        mailbox.send(UpNutIngest(now, source, list))
-                        if (list.size < limit) break
+                            mailbox.send(UpNutIngest(now, BlaseballSource.global(), list))
 
-                        start = list.minByOrNull(UpNutEvent::created)?.created?.toString() ?: start
+                            if (list.size < limit) break
+                            val newStart = list.minOfOrNull(UpNutEvent::created)?.toString() ?: break
 
-                        delay(delayBetweenLoops)
+                            responseTag?.let {
+                                etags[start] = it
+                                etagsStart[start] = newStart
+                            }
+                            start = newStart
+
+                            delay(delayBetweenLoops)
+                        }
                     }
                 } catch (th: Throwable) {
-                    logger.error("Dredging up historical records / Something Else Appears / Not Within Expected Parameters", th)
+                    logger.error("Caught error when looping through {}: ", this, th)
                 }
             }
         }

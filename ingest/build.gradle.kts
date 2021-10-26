@@ -26,11 +26,11 @@ dependencyManagement {
 }
 
 dependencies {
-    val ktor_version = "1.6.0"
+    val ktor_version = "1.6.4"
 
     implementation(project(":common"))
 
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.2.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.3.0")
 
     implementation("io.ktor:ktor-client-okhttp:$ktor_version")
     implementation("io.ktor:ktor-client-encoding:$ktor_version")

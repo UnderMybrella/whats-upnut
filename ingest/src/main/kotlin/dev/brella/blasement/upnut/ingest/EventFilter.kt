@@ -27,7 +27,7 @@ class KennedyLosersNewGuys(val http: HttpClient) : EventFilter {
     var players: MutableMap<String, String> = HashMap()
     var etag: String? = null
     override suspend fun interestingEventsIn(events: List<UpNutEvent>): List<UpNutEvent> {
-        http.get<HttpResponse>("https://www.blaseball.com/database/playerNamesIds") {
+        http.get<HttpResponse>("https://api.blaseball.com/database/playerNamesIds") {
             etag?.let { parameter("If-None-Match", it) }
         }.let { response ->
             //If we failed, don't update, but also -- if we don't have an update, don't update !
@@ -56,7 +56,7 @@ class KennedyLosersNewGuys(val http: HttpClient) : EventFilter {
             true
         }.distinctBy { it.playerTags?.firstOrNull() }.toMutableList()
 
-        http.get<JsonArray>("https://www.blaseball.com/database/players") {
+        http.get<JsonArray>("https://api.blaseball.com/database/players") {
             parameter("ids", hauntings.joinToString(",") { it.playerTags!!.first().toString() })
         }.forEach { element ->
             val id = (element as? JsonObject)?.getStringOrNull("id") ?: return@forEach
