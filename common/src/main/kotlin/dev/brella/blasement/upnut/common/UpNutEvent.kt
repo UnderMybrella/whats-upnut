@@ -41,7 +41,11 @@ data class UpNutEvent(
     val description: String,
     var nuts: JsonPrimitive = JsonNull,
 //    var scales: JsonPrimitive = JsonNull,
-    var metadata: JsonElement
+    var metadata: JsonElement,
+
+    //added in short circuits
+    val blurb: String? = null,
+    val sim: String? = null
 ) {
     var scales: JsonPrimitive
         get() = (metadata as? JsonObject)?.get("scales") as? JsonPrimitive ?: JsonNull
@@ -102,7 +106,11 @@ data class EventuallieEvent(
     val description: String,
     var nuts: JsonPrimitive = JsonNull,
 //    var scales: JsonPrimitive = JsonNull,
-    var metadata: JsonElement
+    var metadata: JsonElement,
+
+    //added in short circuits
+    val blurb: String? = null,
+    val sim: String? = null
 ) {
     var scales: JsonPrimitive
         get() = (metadata as? JsonObject)?.get("scales") as? JsonPrimitive ?: JsonNull
@@ -130,7 +138,11 @@ data class NutEpochEvent(
     val category: Int,
     val description: String,
     val nuts: List<NutsEpoch>,
-    val metadata: JsonElement
+    val metadata: JsonElement,
+
+    //added in short circuits
+    val blurb: String? = null,
+    val sim: String? = null
 )
 
 @Serializable
@@ -148,7 +160,11 @@ data class NutDateTimeEvent(
     val category: Int,
     val description: String,
     val nuts: List<NutsDateTime>,
-    val metadata: JsonElement
+    val metadata: JsonElement,
+
+    //added in short circuits
+    val blurb: String? = null,
+    val sim: String? = null
 )
 
 @Serializable
