@@ -972,15 +972,15 @@ class WhatsUpNut {
                     when (sort) {
                         /** Oldest */
                         1 -> call.redirectInternally("/events") {
-                            append("before", ((time ?: System.currentTimeMillis()) / 1000).toString())
+                            append("before", (time ?: System.currentTimeMillis()).toString())
                             if (after != null) {
-                                append("after", (after / 1000).toString())
+                                append("after", after.toString())
                             } else if (start != null) {
                                 BLASEBALL_TIME_PATTERN.tryParse(start)
                                     ?.utc
                                     ?.unixMillisLong
                                     ?.let {
-                                        append("after", (it / 1000).toString())
+                                        append("after", it.toString())
                                     }
                             }
                             time?.let { append("time", it.toString()) }
@@ -1007,9 +1007,9 @@ class WhatsUpNut {
                                     ?.utc
                                     ?.unixMillisLong
 
-                            append("before", ((timestampStart ?: time ?: System.currentTimeMillis()) / 1000).toString())
+                            append("before", (timestampStart ?: time ?: System.currentTimeMillis()).toString())
 
-                            after?.let { append("after", (it / 1000).toString()) }
+                            after?.let { append("after", it.toString()) }
                             time?.let { append("time", it.toString()) }
 
                             append("sortorder", "desc")
@@ -1042,15 +1042,15 @@ class WhatsUpNut {
                     when (sort) {
                         /** Oldest */
                         1 -> call.redirectInternally("/events") {
-                            append("before", ((time ?: System.currentTimeMillis()) / 1000).toString())
+                            append("before", (time ?: System.currentTimeMillis()).toString())
                             if (after != null) {
-                                append("after", (after / 1000).toString())
+                                append("after", after.toString())
                             } else if (start != null) {
                                 BLASEBALL_TIME_PATTERN.tryParse(start)
                                     ?.utc
                                     ?.unixMillisLong
                                     ?.let {
-                                        append("after", (it / 1000).toString())
+                                        append("after", it.toString())
                                     }
                             }
                             time?.let { append("time", it.toString()) }
@@ -1079,9 +1079,9 @@ class WhatsUpNut {
                                     ?.utc
                                     ?.unixMillisLong
 
-                            append("before", ((timestampStart ?: time ?: System.currentTimeMillis()) / 1000).toString())
+                            append("before", (timestampStart ?: time ?: System.currentTimeMillis()).toString())
 
-                            after?.let { append("after", (it / 1000).toString()) }
+                            after?.let { append("after", it.toString()) }
                             time?.let { append("time", it.toString()) }
 
                             if (offset != null) append("offset", offset.toString())
@@ -1115,15 +1115,15 @@ class WhatsUpNut {
                     when (sort) {
                         /** Oldest */
                         1 -> call.redirectInternally("/events") {
-                            append("before", ((time ?: System.currentTimeMillis()) / 1000).toString())
+                            append("before", (time ?: System.currentTimeMillis()).toString())
                             if (after != null) {
-                                append("after", (after / 1000).toString())
+                                append("after", after.toString())
                             } else if (start != null) {
                                 BLASEBALL_TIME_PATTERN.tryParse(start)
                                     ?.utc
                                     ?.unixMillisLong
                                     ?.let {
-                                        append("after", (it / 1000).toString())
+                                        append("after", it.toString())
                                     }
                             }
                             time?.let { append("time", it.toString()) }
@@ -1152,9 +1152,9 @@ class WhatsUpNut {
                                     ?.utc
                                     ?.unixMillisLong
 
-                            append("before", ((timestampStart ?: time ?: System.currentTimeMillis()) / 1000).toString())
+                            append("before", (timestampStart ?: time ?: System.currentTimeMillis()).toString())
 
-                            after?.let { append("after", (it / 1000).toString()) }
+                            after?.let { append("after", it .toString()) }
                             time?.let { append("time", it.toString()) }
 
                             if (offset != null) append("offset", offset.toString())
@@ -1187,15 +1187,15 @@ class WhatsUpNut {
                     when (sort) {
                         /** Oldest */
                         1 -> call.redirectInternally("/events") {
-                            append("before", ((time ?: System.currentTimeMillis()) / 1000).toString())
+                            append("before", (time ?: System.currentTimeMillis()).toString())
                             if (after != null) {
-                                append("after", (after / 1000).toString())
+                                append("after", after.toString())
                             } else if (start != null) {
                                 BLASEBALL_TIME_PATTERN.tryParse(start)
                                     ?.utc
                                     ?.unixMillisLong
                                     ?.let {
-                                        append("after", (it / 1000).toString())
+                                        append("after", it.toString())
                                     }
                             }
                             time?.let { append("time", it.toString()) }
@@ -1224,9 +1224,9 @@ class WhatsUpNut {
                                     ?.utc
                                     ?.unixMillisLong
 
-                            append("before", ((timestampStart ?: time ?: System.currentTimeMillis()) / 1000).toString())
+                            append("before", (timestampStart ?: time ?: System.currentTimeMillis()).toString())
 
-                            after?.let { append("after", (it / 1000).toString()) }
+                            after?.let { append("after", it.toString()) }
                             time?.let { append("time", it.toString()) }
 
                             if (offset != null) append("offset", offset.toString())
@@ -1259,15 +1259,15 @@ class WhatsUpNut {
                     when (sort) {
                         /** Oldest */
                         1 -> call.redirectInternally("/events") {
-                            append("before", ((time ?: System.currentTimeMillis()) / 1000).toString())
+                            append("before", (time ?: System.currentTimeMillis()).toString())
                             if (after != null) {
-                                append("after", (after / 1000).toString())
+                                append("after", after.toString())
                             } else if (start != null) {
                                 BLASEBALL_TIME_PATTERN.tryParse(start)
                                     ?.utc
                                     ?.unixMillisLong
                                     ?.let {
-                                        append("after", (it / 1000).toString())
+                                        append("after", it.toString())
                                     }
                             }
                             time?.let { append("time", it.toString()) }
@@ -1296,9 +1296,9 @@ class WhatsUpNut {
                                     ?.utc
                                     ?.unixMillisLong
 
-                            append("before", ((timestampStart ?: time ?: System.currentTimeMillis()) / 1000).toString())
+                            append("before", (timestampStart ?: time ?: System.currentTimeMillis()).toString())
 
-                            after?.let { append("after", (it / 1000).toString()) }
+                            after?.let { append("after", it.toString()) }
                             time?.let { append("time", it.toString()) }
 
                             if (offset != null) append("offset", offset.toString())
